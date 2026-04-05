@@ -158,6 +158,16 @@ class SamplingConfig(BaseConfig):
         ),
     ] = {}
 
+    send_return_token_ids: Annotated[
+        bool,
+        Field(
+            description="Whether to request token IDs from the inference server (return_token_ids=True). "
+            "Requires the server to support the return_token_ids vLLM extension. Set to False when "
+            "connecting to servers that do not support this extension (e.g. Dynamo); the orchestrator "
+            "will fall back to local tokenization to reconstruct token IDs.",
+        ),
+    ] = True
+
 
 class EvalSamplingConfig(BaseConfig):
     """Configures how tokens are sampled from the model for evaluation. Largely follows the vLLM sampling parameters."""

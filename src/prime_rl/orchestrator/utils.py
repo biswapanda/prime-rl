@@ -54,10 +54,12 @@ def get_sampling_args(sampling_config: SamplingConfig, temperature: float, is_vl
     if repetition_penalty != 1.0:
         extra_body["repetition_penalty"] = repetition_penalty
 
+    send_return_token_ids = sampling_args.pop("send_return_token_ids", True)
     if is_vllm:
         extra_body["top_k"] = -1
         extra_body["min_p"] = 0.0
-        extra_body["return_token_ids"] = True
+        if send_return_token_ids:
+            extra_body["return_token_ids"] = True
 
     if extra_body:
         sampling_args["extra_body"] = extra_body
