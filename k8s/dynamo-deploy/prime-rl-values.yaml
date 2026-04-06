@@ -1,0 +1,106 @@
+# helm install prime-rl /home/biswaranjanp/dev/rl/prime-rl/k8s/prime-rl -f prime-rl-values.yaml -n biswa-fe
+#
+# Dynamo serves inference -- prime-rl inference is disabled.
+# Orchestrator points to Dynamo frontend + admin stub.
+# Trainer runs on 1 GPU (Qwen3-4B fits easily).
+
+namespace: biswa-fe
+
+image:
+  repository: nvcr.io/nvidian/dynamo-dev/biswa
+  tag: "primerl-9d696afef7"
+  pullPolicy: IfNotPresent
+
+storage:
+  enabled: true
+  storageClassName: vast
+  accessModes:
+    - ReadWriteMany
+  size: 100Gi
+  mountPath: /data
+
+config:
+  example: "prime-rl-dynamo"
+  secrets:
+    enabled: true
+    name: hf-token-secret
+
+# -- Orchestrator: CPU only, talks to Dynamo for inference
+orchestrator:
+  enabled: true
+  replicas: 1
+  autoStart: true
+  command: >-
+    BENCH_API_KEY=EMPTY
+    uv run orchestrator
+    @ /configs/orch.toml
+    --output-dir /data/outputs/run_default
+    --max-concurrent 16
+    ; echo "orchestrator exited: $?" ; sleep infinity
+  resources:
+    requests:
+      memory: "8Gi"
+      cpu: "4"
+  env:
+    - name: HF_TOKEN
+      valueFrom:
+        secretKeyRef:
+          name: hf-token-secret
+          key: HF_TOKEN
+          optional: true
+    - name: WANDB_API_KEY
+      valueFrom:
+        secretKeyRef:
+          name: wandb-secret
+          key: WANDB_API_KEY
+  configMap: prime-rl-configs
+  imagePullSecrets:
+    - name: nvcrimagepullsecret
+  nodeSelector: {}
+
+# -- Inference: DISABLED (Dynamo DGD replaces this)
+inference:
+  enabled: false
+
+# -- Trainer: 1 GPU for Qwen3-4B GRPO training
+trainer:
+  enabled: true
+  replicas: 1
+  autoStart: true
+  command: >-
+    uv run torchrun
+    --nproc-per-node=1
+    --rdzv-endpoint=localhost:29510
+    --rdzv-id=smoke_$(date +%s)
+    -m prime_rl.trainer.rl.train
+    @ /configs/train.toml
+    --output-dir /data/outputs
+    ; echo "trainer exited: $?" ; sleep infinity
+  pytorchCudaAllocConf: "expandable_segments:True"
+  gpu:
+    enabled: true
+    count: 1
+  resources:
+    requests:
+      memory: "32Gi"
+      cpu: "8"
+  env:
+    - name: HF_TOKEN
+      valueFrom:
+        secretKeyRef:
+          name: hf-token-secret
+          key: HF_TOKEN
+          optional: true
+    - name: WANDB_API_KEY
+      valueFrom:
+        secretKeyRef:
+          name: wandb-secret
+          key: WANDB_API_KEY
+  configMap: prime-rl-configs
+  runtimeClassName: nvidia
+  tolerations:
+    - key: nvidia.com/gpu
+      operator: Exists
+      effect: NoSchedule
+  imagePullSecrets:
+    - name: nvcrimagepullsecret

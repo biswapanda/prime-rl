@@ -1,0 +1,52 @@
+# kubectl apply -f prime-rl-configs.yaml -n biswa-fe
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prime-rl-configs
+  namespace: biswa-fe
+data:
+  orch.toml: |
+    max_steps = 20
+    seq_len = 2048
+    batch_size = 64
+    rollouts_per_example = 4
+    use_token_client = false
+
+    [wandb]
+    project = "prime-rl-dynamo-k8s"
+    name = "dynamo-smoke-qwen3-4b"
+
+    [model]
+    name = "Qwen/Qwen3-4B-Instruct-2507"
+
+    [sampling]
+    max_tokens = 256
+    send_return_token_ids = false
+
+    [[env]]
+    id = "math-env"
+    name = "hendrycks-math"
+    args = { dataset_name = "PrimeIntellect/Hendrycks-Math", dataset_subset = "default", math_verify_max_workers = 32, math_verify_timeout = 60 }
+
+    [buffer]
+    easy_threshold = 1.0
+    hard_threshold = 0.0
+
+    [client]
+    base_url = ["http://prime-rl-dynamo-frontend.biswa-fe.svc.cluster.local:8000/v1"]
+    admin_base_url = ["http://admin-stub.biswa-fe.svc.cluster.local:8001"]
+    skip_model_check = true
+
+  train.toml: |
+    max_steps = 20
+
+    [model]
+    name = "Qwen/Qwen3-4B-Instruct-2507"
+    seq_len = 2048
+
+    [wandb]
+    project = "prime-rl-dynamo-k8s"
+    name = "dynamo-smoke-qwen3-4b-trainer"
+
+    [optim]
+    lr = 3e-6
