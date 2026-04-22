@@ -281,6 +281,7 @@ async def update_weights(
     to invalidate any cached KV states computed with the old weights.
     """
     logger = get_logger()
+    logger.info(f"DEBUGTAG:update_weights entry lora_name={lora_name} weight_dir={weight_dir} n_admin_clients={len(admin_clients)}")
 
     weight_dir_posix = weight_dir.as_posix() if weight_dir is not None else None
 
@@ -343,6 +344,7 @@ async def load_lora_adapter(admin_clients: list[AsyncClient], lora_name: str, lo
     """
     logger = get_logger()
     lora_path_posix = lora_path.as_posix()
+    logger.info(f"DEBUGTAG:load_lora_adapter entry lora_name={lora_name} lora_path={lora_path_posix} n_clients={len(admin_clients)}")
 
     @retry(
         retry=retry_if_exception(_is_retryable_lora_error),
