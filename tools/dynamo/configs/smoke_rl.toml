@@ -19,8 +19,6 @@ offline = true
 
 [sampling]
 max_tokens = 64
-# Dynamo doesn't support the return_token_ids vLLM extension -- use local tokenization fallback
-send_return_token_ids = false
 
 [[env]]
 id = "reverse-text"

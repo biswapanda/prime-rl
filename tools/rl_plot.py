@@ -38,14 +38,14 @@ from pathlib import Path
 # ---------------------------------------------------------------------------
 
 RE_ORCH_STEP = re.compile(
-    r"Step (\d+) \| Time: ([\d.]+)s \| Reward: ([\d.]+) \| Seq\. Length: ([\d.]+) tokens/sample"
+    r"Step (\d+) \| Time: ([\d.]+)s \| Reward: (-?[\d.]+) \| Seq\. Length: ([\d.]+) tokens/sample"
     r"(?: \| Async Level: (\d+))?(?: \| Max\. Off-Policy Level: (\d+))?"
 )
 
 RE_TRAINER_STEP = re.compile(
-    r"Step (\d+) \| Time: ([\d.]+)s \| Loss: ([\d.]+)"
-    r" \| Entropy: ([\d.]+)"
-    r" \| Mismatch KL: ([\d.]+)"
+    r"Step (\d+) \| Time: ([\d.]+)s \| Loss: (-?[\d.]+)"
+    r" \| Entropy: (-?[\d.]+)"
+    r" \| Mismatch KL: (-?[\d.]+)"
     r" \| Grad\. Norm: ([\d.]+)"
     r" \| LR: ([\d.e+-]+)"
     r" \| Throughput: ([\d.]+) tokens/s"

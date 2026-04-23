@@ -87,7 +87,7 @@ class RLMonitorState:
 
 # Orchestrator patterns
 RE_ORCH_STEP = re.compile(
-    r"Step (\d+) \| Time: ([\d.]+)s \| Reward: ([\d.]+) \| Seq\. Length: ([\d.]+) tokens/sample"
+    r"Step (\d+) \| Time: ([\d.]+)s \| Reward: (-?[\d.]+) \| Seq\. Length: ([\d.]+) tokens/sample"
     r"(?: \| Async Level: (\d+))?(?: \| Max\. Off-Policy Level: (\d+))?"
 )
 RE_ORCH_PAUSED = re.compile(r"Orchestrator paused: (.+)")
@@ -100,9 +100,9 @@ RE_ORCH_FATAL = re.compile(r"Fatal error in orchestrate")
 
 # Trainer patterns
 RE_TRAINER_STEP = re.compile(
-    r"Step (\d+) \| Time: ([\d.]+)s \| Loss: ([\d.]+)"
-    r" \| Entropy: ([\d.]+)"
-    r" \| Mismatch KL: ([\d.]+)"
+    r"Step (\d+) \| Time: ([\d.]+)s \| Loss: (-?[\d.]+)"
+    r" \| Entropy: (-?[\d.]+)"
+    r" \| Mismatch KL: (-?[\d.]+)"
     r" \| Grad\. Norm: ([\d.]+)"
     r" \| LR: ([\d.e+-]+)"
     r" \| Throughput: ([\d.]+) tokens/s"

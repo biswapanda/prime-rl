@@ -17,7 +17,6 @@ offline = true
 
 [sampling]
 max_tokens = 64
-send_return_token_ids = false
 
 [[env]]
 id = "reverse-text"

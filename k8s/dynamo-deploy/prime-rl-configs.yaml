@@ -21,7 +21,6 @@ data:
 
     [sampling]
     max_tokens = 256
-    send_return_token_ids = false
 
     [[env]]
     id = "math-env"
