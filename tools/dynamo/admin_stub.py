@@ -1,8 +1,17 @@
 #!/usr/bin/env python3
 """
-Stub HTTP server for prime-rl admin endpoints that Dynamo doesn't yet implement.
-Accepts /pause, /resume, and /update_weights, returns 200 OK.
-Used for smoke testing the RL loop; Dynamo won't actually reload weights.
+Stub HTTP server for prime-rl admin endpoints.
+
+NOTE: As of dynamo#8630 (bis/parity-tokenize-tcp), Dynamo's Rust frontend
+implements these routes natively at /v1/rl/* when DYN_ENABLE_RL=true:
+  POST /v1/rl/load_lora_adapter
+  POST /v1/rl/unload_lora_adapter
+  GET  /v1/rl/health
+
+For K8s and any deployment with a real Dynamo frontend, point admin_base_url
+at the Dynamo service (e.g. http://<frontend-svc>:8000/v1/rl). This stub is
+kept as a local development fallback for running the orchestrator without a
+live Dynamo instance.
 
 Usage:
     python tools/dynamo/admin_stub.py

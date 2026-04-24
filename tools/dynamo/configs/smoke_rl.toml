@@ -8,7 +8,8 @@ max_steps = 5
 seq_len = 512
 batch_size = 16
 rollouts_per_example = 4
-# Disable TITO: Dynamo doesn't yet support the /v1/chat/completions/tokens endpoint
+# Disable TITO: Dynamo injects token_ids via nvext (DYN_ENABLE_RL=true) rather than
+# the TITO /v1/chat/completions/tokens path. Keep false for all Dynamo deployments.
 use_token_client = false
 
 [model]
@@ -26,8 +27,8 @@ id = "reverse-text"
 [client]
 # Point at Dynamo instead of prime-rl's own vLLM
 base_url = ["http://localhost:8000/v1"]
-# Admin endpoints (pause/resume/update_weights) go to stub server on :8001
-# until Dynamo implements them natively
-admin_base_url = ["http://localhost:8001"]
+# Admin endpoints (/v1/rl/load_lora_adapter, /v1/rl/health, etc.) are served
+# natively by the Dynamo Rust frontend when DYN_ENABLE_RL=true
+admin_base_url = ["http://localhost:8000/v1/rl"]
 # Dynamo may serve model under a different name -- skip the /v1/models check
 skip_model_check = true

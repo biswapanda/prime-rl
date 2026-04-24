@@ -33,7 +33,9 @@ data:
 
     [client]
     base_url = ["http://prime-rl-dynamo-frontend.biswa-fe.svc.cluster.local:8000/v1"]
-    admin_base_url = ["http://admin-stub.biswa-fe.svc.cluster.local:8001"]
+    # Admin endpoints (/v1/rl/*) are served natively by the Dynamo Rust frontend
+    # (DYN_ENABLE_RL=true). No separate admin-stub service needed.
+    admin_base_url = ["http://prime-rl-dynamo-frontend.biswa-fe.svc.cluster.local:8000/v1/rl"]
     skip_model_check = true
 
   train.toml: |
