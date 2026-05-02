@@ -124,12 +124,12 @@ class FileSystemWeightBroadcast(WeightBroadcast):
         (save_dir / "STABLE").touch()
         _fsync_path(save_dir)
 
-    def maybe_clean(self, max_async_level: int, interval_to_keep: int | None):
+    def maybe_clean(self, retention: int, interval_to_keep: int | None):
         for idx in self.multi_run_manager.used_idxs:
             maybe_clean(
                 get_broadcast_dir(self.multi_run_manager.get_run_dir(idx)),
                 self.multi_run_manager.progress[idx].step,
-                max_async_level,
+                retention,
                 interval_to_keep,
             )
 
