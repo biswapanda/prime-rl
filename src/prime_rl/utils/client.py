@@ -310,9 +310,15 @@ def setup_clients(
 ) -> list[vf.ClientConfig]:
     clients = []
     client_idx = 0
+    # `renderer_transport` selects the engine wire shape. Dynamo accepts the
+    # `dynamo_chat_nvext` shape (placeholder messages + nvext.token_data on
+    # `/v1/chat/completions`) for both renderer-mode and TITO; vanilla vLLM
+    # accepts only the legacy shapes (`/generate` for renderer, `/chat/
+    # completions/tokens` for TITO).
+    is_token_aware_client = client_type in {"renderer", "openai_chat_completions_token"}
     renderer_transport = (
         "dynamo_chat_nvext"
-        if client_type == "renderer" and client_config.backend == "dynamo"
+        if is_token_aware_client and client_config.backend == "dynamo"
         else "prime_vllm_generate"
     )
     for base_url in client_config.base_url:
