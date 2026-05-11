@@ -114,19 +114,99 @@ class VLLMAdminAPI:
 
 
 class DynamoAdminAPI(VLLMAdminAPI):
-    """NVIDIA Dynamo admin endpoints (DYN_ENABLE_RL=true).
+    """NVIDIA Dynamo admin endpoints via ``POST /v1/rl/engine`` method dispatch.
 
-    Inherits all relative-path endpoints from VLLMAdminAPI -- with
-    ``admin_base_url`` pointed at ``…/v1/rl``, httpx joins them onto the right
-    place. Only ``list_models`` differs: Dynamo serves ``/v1/models`` at the
-    OpenAI-compat root, not under ``/v1/rl/``, so we send an absolute URL to
-    bypass the admin prefix.
+    Inherits ``health`` and ``list_models`` from VLLMAdminAPI — these call
+    ``/health`` and ``/v1/models`` relative to the admin base URL.  Because
+    the Dynamo frontend mounts the RL routes on the *same* port as the OpenAI-
+    compat endpoint, ``admin_base_url`` can simply equal ``base_url`` (port
+    8000 by default), so no separate port configuration is needed.
+
+    Args:
+        engine_rpc: The ``collective_rpc`` target forwarded by
+            ``update_weights_from_disk``.  Use ``"update_weights_from_path"``
+            for FileSystemWeightUpdateWorker / NCCLWeightUpdateWorker (default).
+            Plain vLLM without a worker extension uses ``"reload_weights"``.
     """
 
-    async def list_models(self, client: AsyncClient) -> list[dict]:
-        url = httpx.URL(client.base_url).copy_with(path="/v1/models")
-        response = await client.get(str(url))
-        return response.json()["data"]
+    def __init__(self, engine_rpc: str = "update_weights_from_path") -> None:
+        self._engine_rpc = engine_rpc
+
+    async def _dispatch(
+        self,
+        client: AsyncClient,
+        method: str,
+        kwargs: dict | None = None,
+        *,
+        timeout_secs: float | None = None,
+    ) -> dict:
+        body: dict = {"method": method}
+        if kwargs:
+            body["kwargs"] = kwargs
+        if timeout_secs is not None:
+            body["timeout_secs"] = timeout_secs
+        response = await client.post("/v1/rl/engine", json=body)
+        response.raise_for_status()
+        return response.json()
+
+    async def pause(self, client: AsyncClient) -> None:
+        await self._dispatch(client, "pause_generation", {"abort_requests": True, "clear_cache": False})
+
+    async def resume(self, client: AsyncClient) -> None:
+        await self._dispatch(client, "resume_generation")
+
+    async def update_weights(self, client: AsyncClient, weight_dir: str | None) -> None:
+        if weight_dir is None:
+            return
+        await self._dispatch(
+            client,
+            "update_weights_from_disk",
+            {
+                "model_path": weight_dir,
+                "weight_version": Path(weight_dir).name,
+                "engine_rpc": self._engine_rpc,
+            },
+            timeout_secs=180,
+        )
+
+    async def load_lora_adapter(
+        self,
+        client: AsyncClient,
+        lora_name: str,
+        lora_path: str,
+        *,
+        timeout: httpx.Timeout,
+    ) -> None:
+        await self._dispatch(
+            client,
+            "load_lora_adapter",
+            {"lora_name": lora_name, "lora_path": lora_path},
+        )
+
+    async def init_broadcaster(
+        self,
+        client: AsyncClient,
+        *,
+        host: str,
+        port: int,
+        rank_offset: int,
+        inference_world_size: int,
+        timeout: int,
+        quantize_in_weight_transfer: bool,
+    ) -> None:
+        await self._dispatch(
+            client,
+            "init_weights_update_group",
+            {
+                "host": host,
+                "port": port,
+                "rank_offset": rank_offset,
+                "world_size": inference_world_size,
+                "timeout": timeout,
+                "quantize_in_weight_transfer": quantize_in_weight_transfer,
+                "engine_rpc": "init_broadcaster",
+            },
+        )
 
 
 def setup_admin_api(client_config: ClientConfig) -> AdminAPI:
