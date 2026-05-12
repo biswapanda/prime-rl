@@ -149,6 +149,10 @@ trainer:
     templateName: ""
     name: "gpus"
 
+  # Optional: name of an existing ConfigMap to mount at /configs in the
+  # trainer container. Symmetric with `orchestrator.configMap`.
+  configMap: ""
+
   resources:
     requests:
       memory: "4Gi"
