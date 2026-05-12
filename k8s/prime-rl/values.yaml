@@ -83,6 +83,12 @@ inference:
     enabled: true
     count: 1
 
+  # Dynamic Resource Allocation (DRA) — see trainer.resourceClaim for semantics.
+  resourceClaim:
+    enabled: false
+    templateName: ""
+    name: "gpus"
+
   resources:
     requests:
       memory: "4Gi"
@@ -130,6 +136,18 @@ trainer:
   gpu:
     enabled: true
     count: 1
+
+  # Dynamic Resource Allocation (DRA) — for DRA-only node pools that reject the
+  # legacy `nvidia.com/gpu` device-plugin resource. When `resourceClaim.enabled`
+  # is true the chart will NOT emit `nvidia.com/gpu` requests/limits and will
+  # instead add a `spec.resourceClaims` entry to the pod and a `resources.claims`
+  # reference inside the container.
+  #   templateName: name of a pre-existing ResourceClaimTemplate in the same ns
+  #   name:         logical claim name used to link pod <-> container
+  resourceClaim:
+    enabled: false
+    templateName: ""
+    name: "gpus"
 
   resources:
     requests:

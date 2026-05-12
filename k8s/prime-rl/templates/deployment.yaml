@@ -161,6 +161,11 @@ spec:
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+      {{- if .Values.inference.resourceClaim.enabled }}
+      resourceClaims:
+      - name: {{ .Values.inference.resourceClaim.name }}
+        resourceClaimTemplateName: {{ .Values.inference.resourceClaim.templateName }}
+      {{- end }}
       containers:
       - name: prime-rl-inference
         image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
@@ -213,19 +218,23 @@ spec:
         {{- end }}
         resources:
           requests:
-            {{- if .Values.inference.gpu.enabled }}
+            {{- if and .Values.inference.gpu.enabled (not .Values.inference.resourceClaim.enabled) }}
             nvidia.com/gpu: {{ .Values.inference.gpu.count }}
             {{- end }}
             memory: {{ .Values.inference.resources.requests.memory }}
             cpu: {{ .Values.inference.resources.requests.cpu }}
           limits:
-            {{- if .Values.inference.gpu.enabled }}
+            {{- if and .Values.inference.gpu.enabled (not .Values.inference.resourceClaim.enabled) }}
             nvidia.com/gpu: {{ .Values.inference.gpu.count }}
             {{- end }}
             {{- if .Values.inference.resources.limits }}
             memory: {{ .Values.inference.resources.limits.memory }}
             cpu: {{ .Values.inference.resources.limits.cpu }}
             {{- end }}
+          {{- if .Values.inference.resourceClaim.enabled }}
+          claims:
+          - name: {{ .Values.inference.resourceClaim.name }}
+          {{- end }}
         {{- if and .Values.inference.probes .Values.inference.probes.enabled }}
         startupProbe:
           httpGet:
@@ -298,6 +307,11 @@ spec:
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+      {{- if .Values.trainer.resourceClaim.enabled }}
+      resourceClaims:
+      - name: {{ .Values.trainer.resourceClaim.name }}
+        resourceClaimTemplateName: {{ .Values.trainer.resourceClaim.templateName }}
+      {{- end }}
       containers:
       - name: prime-rl-trainer
         image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
@@ -367,19 +381,23 @@ spec:
         {{- end }}
         resources:
           requests:
-            {{- if .Values.trainer.gpu.enabled }}
+            {{- if and .Values.trainer.gpu.enabled (not .Values.trainer.resourceClaim.enabled) }}
             nvidia.com/gpu: {{ .Values.trainer.gpu.count }}
             {{- end }}
             memory: {{ .Values.trainer.resources.requests.memory }}
             cpu: {{ .Values.trainer.resources.requests.cpu }}
           limits:
-            {{- if .Values.trainer.gpu.enabled }}
+            {{- if and .Values.trainer.gpu.enabled (not .Values.trainer.resourceClaim.enabled) }}
             nvidia.com/gpu: {{ .Values.trainer.gpu.count }}
             {{- end }}
             {{- if .Values.trainer.resources.limits }}
             memory: {{ .Values.trainer.resources.limits.memory }}
             cpu: {{ .Values.trainer.resources.limits.cpu }}
             {{- end }}
+          {{- if .Values.trainer.resourceClaim.enabled }}
+          claims:
+          - name: {{ .Values.trainer.resourceClaim.name }}
+          {{- end }}
         {{- if and .Values.trainer.probes .Values.trainer.probes.enabled }}
         startupProbe:
           httpGet:
