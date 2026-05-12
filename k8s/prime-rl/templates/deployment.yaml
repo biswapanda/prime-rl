@@ -258,16 +258,29 @@ spec:
           failureThreshold: {{ .Values.inference.probes.readiness.failureThreshold }}
           timeoutSeconds: {{ .Values.inference.probes.readiness.timeoutSeconds }}
         {{- end }}
-        {{- if .Values.storage.enabled }}
+        {{- if or .Values.storage.enabled .Values.inference.configMap }}
         volumeMounts:
+        {{- if .Values.storage.enabled }}
         - name: shared-data
           mountPath: {{ .Values.storage.mountPath }}
         {{- end }}
-      {{- if .Values.storage.enabled }}
+        {{- if .Values.inference.configMap }}
+        - name: rl-configs
+          mountPath: /configs
+        {{- end }}
+        {{- end }}
+      {{- if or .Values.storage.enabled .Values.inference.configMap }}
       volumes:
+      {{- if .Values.storage.enabled }}
       - name: shared-data
         persistentVolumeClaim:
           claimName: {{ .Values.storage.existingClaim | default (printf "%s-shared-data" .Release.Name) }}
+      {{- end }}
+      {{- if .Values.inference.configMap }}
+      - name: rl-configs
+        configMap:
+          name: {{ .Values.inference.configMap }}
+      {{- end }}
       {{- end }}
 {{- end }}
 ---

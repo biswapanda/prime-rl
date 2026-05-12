@@ -89,6 +89,12 @@ inference:
     templateName: ""
     name: "gpus"
 
+  # Optional: name of an existing ConfigMap to mount at /configs in the
+  # inference container. Symmetric with orchestrator.configMap and
+  # trainer.configMap. Lets a native vLLM inference server read its
+  # infer.toml from a ConfigMap.
+  configMap: ""
+
   resources:
     requests:
       memory: "4Gi"
