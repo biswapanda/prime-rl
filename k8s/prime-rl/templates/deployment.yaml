@@ -115,7 +115,7 @@ spec:
       {{- if .Values.storage.enabled }}
       - name: shared-data
         persistentVolumeClaim:
-          claimName: {{ .Release.Name }}-shared-data
+          claimName: {{ .Values.storage.existingClaim | default (printf "%s-shared-data" .Release.Name) }}
       {{- end }}
       {{- if .Values.orchestrator.configMap }}
       - name: rl-configs
@@ -258,7 +258,7 @@ spec:
       volumes:
       - name: shared-data
         persistentVolumeClaim:
-          claimName: {{ .Release.Name }}-shared-data
+          claimName: {{ .Values.storage.existingClaim | default (printf "%s-shared-data" .Release.Name) }}
       {{- end }}
 {{- end }}
 ---
@@ -412,6 +412,6 @@ spec:
       volumes:
       - name: shared-data
         persistentVolumeClaim:
-          claimName: {{ .Release.Name }}-shared-data
+          claimName: {{ .Values.storage.existingClaim | default (printf "%s-shared-data" .Release.Name) }}
       {{- end }}
 {{- end }}
