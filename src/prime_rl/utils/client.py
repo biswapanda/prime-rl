@@ -388,6 +388,15 @@ def setup_clients(
     reasoning_parser: str | None = None,
     renderer_pool_size: int | None = None,
 ) -> list[vf.ClientConfig]:
+    # Pick the verifiers wire-shape selector based on client_config.backend.
+    # When backend == "dynamo", both RendererClient and
+    # OpenAIChatCompletionsTokenClient route through Dynamo's nvext path:
+    #   - request:  nvext.token_data carries pre-tokenized prompt
+    #   - response: nvext.engine_data carries completion_token_ids + logprobs
+    # Default backend keeps the legacy vLLM TITO surface.
+    renderer_transport = (
+        "dynamo_chat_nvext" if client_config.backend == "dynamo" else "prime_vllm_generate"
+    )
     clients = []
     client_idx = 0
     for base_url in client_config.base_url:
@@ -402,6 +411,7 @@ def setup_clients(
                     renderer=renderer_name,
                     renderer_model_name=renderer_model_name,
                     renderer_pool_size=renderer_pool_size,
+                    renderer_transport=renderer_transport,
                     tool_parser=tool_parser,
                     reasoning_parser=reasoning_parser,
                     api_base_url=base_url,
