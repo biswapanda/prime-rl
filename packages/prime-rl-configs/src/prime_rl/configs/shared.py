@@ -305,8 +305,10 @@ class ClientConfig(BaseConfig):
         Field(
             description="Separate base URLs for admin operations (weight updates, health checks). "
             "When set, admin clients use these URLs instead of base_url, allowing weight "
-            "updates to bypass routers and hit each server directly. Used in disaggregated "
-            "P/D deployments where the inference router should not handle admin traffic.",
+            "updates to bypass routers and hit each server directly. For backend='dynamo', "
+            "these URLs point at each worker's system status server (DYN_SYSTEM_PORT, default "
+            "8081), where /engine/* routes are exposed. If unset for backend='dynamo', "
+            "prime-rl discovers worker system URLs from GET /v1/rl/engines on base_url.",
         ),
     ] = None
 
@@ -317,8 +319,8 @@ class ClientConfig(BaseConfig):
                 "Inference backend selector. Picks the AdminAPI implementation used for "
                 "pause/resume/update_weights/load_lora_adapter/list_models. Default 'vllm' "
                 "matches prime-rl's bundled vLLM frontend. 'dynamo' targets NVIDIA Dynamo's "
-                "native /v1/rl/* admin routes (DYN_ENABLE_RL=true) and routes /v1/models to "
-                "the OpenAI-compat root rather than under /v1/rl/."
+                "worker /engine/* admin routes on admin_base_url and routes /v1/models to "
+                "the OpenAI-compat base_url."
             ),
         ),
     ] = "vllm"

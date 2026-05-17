@@ -114,13 +114,11 @@ class VLLMAdminAPI:
 
 
 class DynamoAdminAPI(VLLMAdminAPI):
-    """NVIDIA Dynamo admin endpoints via ``POST /v1/rl/engine`` method dispatch.
+    """NVIDIA Dynamo worker admin endpoints via ``POST /engine/<method>``.
 
-    Inherits ``health`` and ``list_models`` from VLLMAdminAPI — these call
-    ``/health`` and ``/v1/models`` relative to the admin base URL.  Because
-    the Dynamo frontend mounts the RL routes on the *same* port as the OpenAI-
-    compat endpoint, ``admin_base_url`` can simply equal ``base_url`` (port
-    8000 by default), so no separate port configuration is needed.
+    Each Dynamo worker exposes engine routes on its system status server
+    (``DYN_SYSTEM_PORT``, default 8081). Multi-worker deployments are handled by
+    iterating over ``admin_clients``.
 
     Args:
         engine_rpc: The ``collective_rpc`` target forwarded by
@@ -129,45 +127,65 @@ class DynamoAdminAPI(VLLMAdminAPI):
             Plain vLLM without a worker extension uses ``"reload_weights"``.
     """
 
-    def __init__(self, engine_rpc: str = "update_weights_from_path") -> None:
+    def __init__(self, engine_rpc: str = "update_weights_from_path", weight_broadcast_type: str = "filesystem") -> None:
         self._engine_rpc = engine_rpc
+        # Determines which engine method is called per step: "update_weights_from_distributed"
+        # for NCCL (trainer broadcasts; worker just needs to receive) vs
+        # "update_weights_from_disk" for filesystem. Set externally by the orchestrator
+        # once weight_broadcast config is resolved. Defaults to filesystem (run #35 behaviour).
+        self._weight_broadcast_type = weight_broadcast_type
 
-    async def _dispatch(
+    async def health(self, client: AsyncClient) -> None:
+        await client.get("/health")
+
+    async def _post_engine(
         self,
         client: AsyncClient,
         method: str,
-        kwargs: dict | None = None,
+        body: dict | None = None,
         *,
-        timeout_secs: float | None = None,
+        timeout: httpx.Timeout | None = None,
     ) -> dict:
-        body: dict = {"method": method}
-        if kwargs:
-            body["kwargs"] = kwargs
-        if timeout_secs is not None:
-            body["timeout_secs"] = timeout_secs
-        response = await client.post("/v1/rl/engine", json=body)
+        response = await client.post(f"/engine/{method}", json=body or {}, timeout=timeout)
         response.raise_for_status()
-        return response.json()
+        data = response.json()
+        if isinstance(data, dict) and data.get("status") == "error":
+            raise RuntimeError(data.get("message", f"Dynamo /engine/{method} failed"))
+        return data
 
     async def pause(self, client: AsyncClient) -> None:
-        await self._dispatch(client, "pause_generation", {"abort_requests": True, "clear_cache": False})
+        await self._post_engine(client, "pause_generation", {"mode": "keep", "clear_cache": False})
 
     async def resume(self, client: AsyncClient) -> None:
-        await self._dispatch(client, "resume_generation")
+        await self._post_engine(client, "resume_generation")
 
     async def update_weights(self, client: AsyncClient, weight_dir: str | None) -> None:
         if weight_dir is None:
             return
-        await self._dispatch(
-            client,
-            "update_weights_from_disk",
-            {
-                "model_path": weight_dir,
-                "weight_version": Path(weight_dir).name,
-                "engine_rpc": self._engine_rpc,
-            },
-            timeout_secs=180,
-        )
+        if self._weight_broadcast_type == "nccl":
+            # NCCL path: trainer has already broadcast weights via the NCCL group;
+            # this RPC tells the inference worker to call receive_state_dict().
+            await self._post_engine(
+                client,
+                "update_weights_from_distributed",
+                {
+                    "weight_version": Path(weight_dir).name,
+                    "weight_dir": weight_dir,
+                    "engine_rpc": self._engine_rpc,
+                },
+                timeout=httpx.Timeout(180.0),
+            )
+        else:
+            await self._post_engine(
+                client,
+                "update_weights_from_disk",
+                {
+                    "model_path": weight_dir,
+                    "weight_version": Path(weight_dir).name,
+                    "engine_rpc": self._engine_rpc,
+                },
+                timeout=httpx.Timeout(180.0),
+            )
 
     async def load_lora_adapter(
         self,
@@ -177,10 +195,11 @@ class DynamoAdminAPI(VLLMAdminAPI):
         *,
         timeout: httpx.Timeout,
     ) -> None:
-        await self._dispatch(
+        await self._post_engine(
             client,
             "load_lora_adapter",
             {"lora_name": lora_name, "lora_path": lora_path},
+            timeout=timeout,
         )
 
     async def init_broadcaster(
@@ -194,14 +213,14 @@ class DynamoAdminAPI(VLLMAdminAPI):
         timeout: int,
         quantize_in_weight_transfer: bool,
     ) -> None:
-        await self._dispatch(
+        await self._post_engine(
             client,
             "init_weights_update_group",
             {
                 "host": host,
                 "port": port,
                 "rank_offset": rank_offset,
-                "world_size": inference_world_size,
+                "inference_world_size": inference_world_size,
                 "timeout": timeout,
                 "quantize_in_weight_transfer": quantize_in_weight_transfer,
                 "engine_rpc": "init_broadcaster",
@@ -284,6 +303,11 @@ class StaticInferencePool:
         )
         self._eval_clients = setup_clients(client_config, client_type=eval_client_type)
         self._admin_clients = setup_admin_clients(client_config)
+        self._model_clients = (
+            setup_admin_clients(client_config, use_admin_base_url=False)
+            if client_config.backend == "dynamo" or client_config.admin_base_url
+            else self._admin_clients
+        )
         self._admin_api = setup_admin_api(client_config)
         self._skip_model_check = client_config.skip_model_check
         self._wait_for_ready_timeout = client_config.wait_for_ready_timeout
@@ -315,7 +339,7 @@ class StaticInferencePool:
             admin=self._admin_api,
         )
         await maybe_check_has_model(
-            self._admin_clients, model_name, skip_model_check=self._skip_model_check, admin=self._admin_api
+            self._model_clients, model_name, skip_model_check=self._skip_model_check, admin=self._admin_api
         )
 
     async def update_weights(self, weight_dir: Path | None, lora_name: str | None = None, step: int = 0) -> None:
@@ -394,9 +418,7 @@ def setup_clients(
     #   - request:  nvext.token_data carries pre-tokenized prompt
     #   - response: nvext.engine_data carries completion_token_ids + logprobs
     # Default backend keeps the legacy vLLM TITO surface.
-    renderer_transport = (
-        "dynamo_chat_nvext" if client_config.backend == "dynamo" else "prime_vllm_generate"
-    )
+    renderer_transport = "dynamo_chat_nvext" if client_config.backend == "dynamo" else "prime_vllm_generate"
     clients = []
     client_idx = 0
     for base_url in client_config.base_url:
@@ -429,14 +451,21 @@ def setup_clients(
     return clients
 
 
-def setup_admin_clients(client_config: ClientConfig) -> list[AsyncClient]:
+def setup_admin_clients(client_config: ClientConfig, *, use_admin_base_url: bool = True) -> list[AsyncClient]:
     """Create dedicated admin clients for weight update operations.
 
     Uses a separate connection pool to avoid queueing behind streaming requests.
-    When admin_base_url is set, uses those URLs instead of base_url, allowing
-    weight updates to bypass routers in disaggregated P/D deployments.
+    When admin_base_url is set and use_admin_base_url is true, uses those URLs
+    instead of base_url, allowing weight updates to bypass routers in
+    disaggregated P/D deployments. For Dynamo, if admin_base_url is unset,
+    discover worker system URLs from GET /v1/rl/engines.
     """
-    urls = client_config.admin_base_url if client_config.admin_base_url else client_config.base_url
+    if use_admin_base_url and client_config.admin_base_url:
+        urls = client_config.admin_base_url
+    elif use_admin_base_url and client_config.backend == "dynamo":
+        urls = discover_dynamo_admin_base_urls(client_config)
+    else:
+        urls = client_config.base_url
 
     def _setup_admin_client(base_url: str) -> httpx.AsyncClient:
         headers = client_config.headers.copy()  # avoid mutating config
@@ -455,6 +484,37 @@ def setup_admin_clients(client_config: ClientConfig) -> list[AsyncClient]:
         )
 
     return [_setup_admin_client(base_url) for base_url in urls]
+
+
+def discover_dynamo_admin_base_urls(client_config: ClientConfig) -> list[str]:
+    urls: list[str] = []
+    headers = client_config.headers.copy()
+    api_key = os.getenv(client_config.api_key_var, "EMPTY")
+    if api_key and api_key != "EMPTY":
+        headers["Authorization"] = f"Bearer {api_key}"
+
+    for base_url in client_config.base_url:
+        discovery_base = base_url.rstrip("/").removesuffix("/v1")
+        with httpx.Client(
+            base_url=discovery_base,
+            headers=headers,
+            timeout=httpx.Timeout(connect=client_config.connect_timeout, read=30.0, write=30.0, pool=10.0),
+        ) as client:
+            response = client.get("/v1/rl/engines")
+            response.raise_for_status()
+            for engine in response.json().get("engines", []):
+                system_url = engine.get("system_url")
+                if system_url:
+                    urls.append(system_url)
+
+    deduped = list(dict.fromkeys(urls))
+    if not deduped:
+        raise ValueError(
+            "Dynamo backend did not discover any worker system URLs from /v1/rl/engines. "
+            "Set client.admin_base_url explicitly or configure DYN_RL_ENGINE_SYSTEM_URL / "
+            "DYN_RL_SYSTEM_URL_TEMPLATE on the Dynamo frontend."
+        )
+    return deduped
 
 
 async def maybe_check_has_model(
