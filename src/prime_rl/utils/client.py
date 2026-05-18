@@ -198,8 +198,11 @@ class DynamoAdminAPI(VLLMAdminAPI):
     ) -> None:
         await self._post_engine(
             client,
-            "load_lora_adapter",
-            {"lora_name": lora_name, "lora_path": lora_path},
+            "load_lora",
+            {
+                "lora_name": lora_name,
+                "source": {"uri": Path(lora_path).absolute().as_uri()},
+            },
             timeout=timeout,
         )
 

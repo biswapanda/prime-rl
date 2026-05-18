@@ -7,6 +7,7 @@ import verifiers as vf
 
 from prime_rl.configs.shared import ClientConfig
 from prime_rl.utils.client import (
+    DynamoAdminAPI,
     _dynamo_rl_discovery_base_urls,
     _is_retryable_lora_error,
     discover_dynamo_admin_base_urls,
@@ -51,6 +52,32 @@ def test_load_lora_adapter_succeeds_on_first_attempt():
     mock_client.post.assert_called_once_with(
         "/load_lora_adapter",
         json={"lora_name": "test-lora", "lora_path": "/test/path"},
+        timeout=httpx.Timeout(connect=10.0, read=30.0, write=60.0, pool=10.0),
+    )
+
+
+def test_dynamo_load_lora_adapter_uses_existing_lora_engine_route():
+    mock_client = AsyncMock()
+    mock_response = MagicMock()
+    mock_response.raise_for_status = MagicMock()
+    mock_response.json.return_value = {"status": "success"}
+    mock_client.post.return_value = mock_response
+
+    asyncio.run(
+        DynamoAdminAPI().load_lora_adapter(
+            mock_client,
+            "test-lora",
+            "/test/path",
+            timeout=httpx.Timeout(connect=10.0, read=30.0, write=60.0, pool=10.0),
+        )
+    )
+
+    mock_client.post.assert_called_once_with(
+        "/engine/load_lora",
+        json={
+            "lora_name": "test-lora",
+            "source": {"uri": Path("/test/path").absolute().as_uri()},
+        },
         timeout=httpx.Timeout(connect=10.0, read=30.0, write=60.0, pool=10.0),
     )
 
