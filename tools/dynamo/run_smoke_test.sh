@@ -28,6 +28,11 @@ CONFIG_DIR="$SCRIPT_DIR/configs"
 OUTPUT_DIR="${OUTPUT_DIR:-/tmp/dynamo_smoke_outputs}"
 TRAINER_GPU="${TRAINER_GPU:-1}"
 RDZV_PORT="${RDZV_PORT:-29510}"
+SMOKE_MODEL="${SMOKE_MODEL:-}"
+MODEL_ARGS=()
+if [[ -n "$SMOKE_MODEL" ]]; then
+    MODEL_ARGS=(--model.name "$SMOKE_MODEL" --tokenizer.name "$SMOKE_MODEL")
+fi
 
 # Pick short vs long config
 if [[ "${1:-}" == "--long" ]]; then
@@ -55,7 +60,7 @@ BENCH_API_KEY=EMPTY CUDA_VISIBLE_DEVICES="" \
   uv run orchestrator \
     @ "$ORCH_CONFIG" \
     --output-dir "$ORCH_DIR" \
-    --max-concurrent 4 \
+    "${MODEL_ARGS[@]}" \
   > "$ORCH_LOG" 2>&1 &
 ORCH_PID=$!
 echo "[smoke] Orchestrator PID: $ORCH_PID (log: $ORCH_LOG)"
@@ -69,19 +74,20 @@ CUDA_VISIBLE_DEVICES="$TRAINER_GPU" uv run torchrun \
   --nproc-per-node=1 \
   --rdzv-endpoint="localhost:$RDZV_PORT" \
   --rdzv-id="smoke_$(date +%s)" \
-  -m prime_rl.trainer.rl.train \
+    -m prime_rl.trainer.rl.train \
     @ "$TRAINER_CONFIG" \
     --output-dir "$OUTPUT_DIR" \
+    "${MODEL_ARGS[@]}" \
   > "$TRAINER_LOG" 2>&1 &
 TRAINER_PID=$!
 echo "[smoke] Trainer PID: $TRAINER_PID (log: $TRAINER_LOG)"
 
 echo "[smoke] Waiting for both processes..."
 
-wait $ORCH_PID
-ORCH_EXIT=$?
-wait $TRAINER_PID
-TRAINER_EXIT=$?
+ORCH_EXIT=0
+TRAINER_EXIT=0
+wait $ORCH_PID || ORCH_EXIT=$?
+wait $TRAINER_PID || TRAINER_EXIT=$?
 
 echo ""
 echo "[smoke] Orchestrator exit: $ORCH_EXIT"

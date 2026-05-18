@@ -5,6 +5,7 @@ import os
 from itertools import cycle
 from pathlib import Path
 from typing import Protocol, runtime_checkable
+from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 import verifiers as vf
@@ -458,7 +459,7 @@ def setup_admin_clients(client_config: ClientConfig, *, use_admin_base_url: bool
     When admin_base_url is set and use_admin_base_url is true, uses those URLs
     instead of base_url, allowing weight updates to bypass routers in
     disaggregated P/D deployments. For Dynamo, if admin_base_url is unset,
-    discover worker system URLs from GET /v1/rl/engines.
+    discover worker system URLs from GET /v1/rl/workers.
     """
     if use_admin_base_url and client_config.admin_base_url:
         urls = client_config.admin_base_url
@@ -493,28 +494,50 @@ def discover_dynamo_admin_base_urls(client_config: ClientConfig) -> list[str]:
     if api_key and api_key != "EMPTY":
         headers["Authorization"] = f"Bearer {api_key}"
 
-    for base_url in client_config.base_url:
+    for base_url in _dynamo_rl_discovery_base_urls(client_config):
         discovery_base = base_url.rstrip("/").removesuffix("/v1")
         with httpx.Client(
             base_url=discovery_base,
             headers=headers,
             timeout=httpx.Timeout(connect=client_config.connect_timeout, read=30.0, write=30.0, pool=10.0),
         ) as client:
-            response = client.get("/v1/rl/engines")
+            response = client.get("/v1/rl/workers")
             response.raise_for_status()
-            for engine in response.json().get("engines", []):
-                system_url = engine.get("system_url")
+            for worker in response.json().get("workers", []):
+                system_url = worker.get("system_url")
                 if system_url:
                     urls.append(system_url)
 
     deduped = list(dict.fromkeys(urls))
     if not deduped:
         raise ValueError(
-            "Dynamo backend did not discover any worker system URLs from /v1/rl/engines. "
-            "Set client.admin_base_url explicitly or configure DYN_RL_ENGINE_SYSTEM_URL / "
+            "Dynamo backend did not discover any worker system URLs from /v1/rl/workers. "
+            "Set client.admin_base_url explicitly, set client.rl_base_url to the Dynamo "
+            "RL discovery listener, or configure DYN_RL_ENGINE_SYSTEM_URL / "
             "DYN_RL_SYSTEM_URL_TEMPLATE on the Dynamo frontend."
         )
     return deduped
+
+
+def _dynamo_rl_discovery_base_urls(client_config: ClientConfig) -> list[str]:
+    configured = getattr(client_config, "rl_base_url", None)
+    if configured:
+        return configured
+
+    rl_port = int(os.getenv("DYN_RL_PORT", "8002"))
+    return [_replace_url_port(base_url, rl_port) for base_url in client_config.base_url]
+
+
+def _replace_url_port(base_url: str, port: int) -> str:
+    parsed = urlsplit(base_url.rstrip("/").removesuffix("/v1"))
+    scheme = parsed.scheme or "http"
+    host = parsed.hostname or parsed.netloc
+    if not host:
+        raise ValueError(f"Cannot derive Dynamo RL discovery URL from base_url={base_url!r}")
+    if ":" in host and not host.startswith("["):
+        host = f"[{host}]"
+    netloc = f"{host}:{port}"
+    return urlunsplit((scheme, netloc, "", "", ""))
 
 
 async def maybe_check_has_model(
