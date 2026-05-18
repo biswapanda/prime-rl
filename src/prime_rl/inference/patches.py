@@ -18,6 +18,7 @@ def transformers_v5_compat():
     monkey_patch_deep_gemm_ep_scatter()
     monkey_patch_deep_gemm_silu_mul_quant_int64()
     monkey_patch_dp_engine_core_pause_resume_deadlock()
+    monkey_patch_fp32_lm_head()
 
 
 @triton.jit
@@ -976,6 +977,10 @@ def monkey_patch_fp32_lm_head():
 
     logger = init_logger(__name__)
 
+    if getattr(LogitsProcessor, "_prime_rl_fp32_lm_head_patch_installed", False):
+        logger.debug("fp32 lm_head patch already installed; skipping.")
+        return
+
     _original_init = LogitsProcessor.__init__
     _original_get_logits = LogitsProcessor._get_logits
 
@@ -1008,4 +1013,5 @@ def monkey_patch_fp32_lm_head():
 
     LogitsProcessor.__init__ = _patched_init
     LogitsProcessor._get_logits = _patched_get_logits
+    LogitsProcessor._prime_rl_fp32_lm_head_patch_installed = True
     logger.info("Installed fp32 lm_head patch (native out_dtype=fp32 mm).")
