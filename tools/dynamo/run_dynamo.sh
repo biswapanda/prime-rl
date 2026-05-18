@@ -24,9 +24,8 @@ export CUDA_VISIBLE_DEVICES
 source "$DYNAMO_VENV/bin/activate"
 
 echo "[dynamo-smoke] Starting frontend..."
-DYN_ENABLE_RL_ENDPOINTS=true \
-DYN_RL_PORT="${DYN_RL_PORT:-8002}" \
-DYN_RL_ENGINE_SYSTEM_URL="${DYN_RL_ENGINE_SYSTEM_URL:-http://localhost:${DYN_SYSTEM_PORT:-8081}}" \
+DYN_ENABLE_RL=true \
+DYN_RL_PORT="${DYN_RL_PORT:-8001}" \
 python -m dynamo.frontend > "$LOG_DIR/dynamo_frontend.log" 2>&1 &
 FRONTEND_PID=$!
 echo "[dynamo-smoke] Frontend PID: $FRONTEND_PID (log: $LOG_DIR/dynamo_frontend.log)"

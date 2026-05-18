@@ -123,23 +123,23 @@ def test_setup_clients_preserves_chat_client_defaults():
 
 
 def test_dynamo_rl_discovery_base_urls_derive_from_base_url(monkeypatch):
-    monkeypatch.setenv("DYN_RL_PORT", "18002")
+    monkeypatch.setenv("DYN_RL_PORT", "18001")
     client_config = ClientConfig(
         base_url=["http://frontend.local:8000/v1"],
         backend="dynamo",
     )
 
-    assert _dynamo_rl_discovery_base_urls(client_config) == ["http://frontend.local:18002"]
+    assert _dynamo_rl_discovery_base_urls(client_config) == ["http://frontend.local:18001"]
 
 
 def test_dynamo_rl_discovery_base_urls_honor_explicit_config():
     client_config = ClientConfig(
         base_url=["http://frontend.local:8000/v1"],
         backend="dynamo",
-        rl_base_url=["http://frontend.local:8002/v1"],
+        rl_base_url=["http://frontend.local:8001/v1"],
     )
 
-    assert _dynamo_rl_discovery_base_urls(client_config) == ["http://frontend.local:8002/v1"]
+    assert _dynamo_rl_discovery_base_urls(client_config) == ["http://frontend.local:8001/v1"]
 
 
 def test_discover_dynamo_admin_base_urls_reads_workers(monkeypatch):
@@ -178,12 +178,12 @@ def test_discover_dynamo_admin_base_urls_reads_workers(monkeypatch):
     client_config = ClientConfig(
         base_url=["http://frontend.local:8000/v1"],
         backend="dynamo",
-        rl_base_url=["http://frontend.local:8002/v1"],
+        rl_base_url=["http://frontend.local:8001/v1"],
     )
 
     assert discover_dynamo_admin_base_urls(client_config) == [
         "http://worker-0:8081",
         "http://worker-1:8081",
     ]
-    assert calls[0][0:2] == ("init", "http://frontend.local:8002")
+    assert calls[0][0:2] == ("init", "http://frontend.local:8001")
     assert ("get", "/v1/rl/workers") in calls

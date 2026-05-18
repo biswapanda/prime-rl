@@ -36,5 +36,5 @@ id = "reverse-text"
 [client]
 base_url = ["http://localhost:8000/v1"]
 backend = "dynamo"
-rl_base_url = ["http://localhost:8002/v1"]
+rl_base_url = ["http://localhost:8001/v1"]
 skip_model_check = true

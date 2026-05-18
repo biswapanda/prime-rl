@@ -459,7 +459,7 @@ def setup_admin_clients(client_config: ClientConfig, *, use_admin_base_url: bool
     When admin_base_url is set and use_admin_base_url is true, uses those URLs
     instead of base_url, allowing weight updates to bypass routers in
     disaggregated P/D deployments. For Dynamo, if admin_base_url is unset,
-    discover worker system URLs from GET /v1/rl/workers.
+    discover worker-advertised system URLs from GET /v1/rl/workers.
     """
     if use_admin_base_url and client_config.admin_base_url:
         urls = client_config.admin_base_url
@@ -513,8 +513,8 @@ def discover_dynamo_admin_base_urls(client_config: ClientConfig) -> list[str]:
         raise ValueError(
             "Dynamo backend did not discover any worker system URLs from /v1/rl/workers. "
             "Set client.admin_base_url explicitly, set client.rl_base_url to the Dynamo "
-            "RL discovery listener, or configure DYN_RL_ENGINE_SYSTEM_URL / "
-            "DYN_RL_SYSTEM_URL_TEMPLATE on the Dynamo frontend."
+            "RL discovery listener, and make sure Dynamo workers run with DYN_ENABLE_RL "
+            "and a system status server enabled."
         )
     return deduped
 
@@ -524,7 +524,7 @@ def _dynamo_rl_discovery_base_urls(client_config: ClientConfig) -> list[str]:
     if configured:
         return configured
 
-    rl_port = int(os.getenv("DYN_RL_PORT", "8002"))
+    rl_port = int(os.getenv("DYN_RL_PORT", "8001"))
     return [_replace_url_port(base_url, rl_port) for base_url in client_config.base_url]
 
 

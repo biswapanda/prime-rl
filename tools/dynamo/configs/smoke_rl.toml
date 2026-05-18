@@ -39,9 +39,9 @@ id = "reverse-text"
 [client]
 # Point at Dynamo instead of prime-rl's own vLLM
 base_url = ["http://localhost:8000/v1"]
-# Discover worker system URLs from Dynamo's dedicated RL listener, then call
-# each worker's /engine/* admin routes directly.
+# Discover worker-advertised system URLs from Dynamo's dedicated RL listener,
+# then call each worker's /engine/* admin routes directly.
 backend = "dynamo"
-rl_base_url = ["http://localhost:8002/v1"]
+rl_base_url = ["http://localhost:8001/v1"]
 # Dynamo may serve model under a different name -- skip the /v1/models check
 skip_model_check = true
