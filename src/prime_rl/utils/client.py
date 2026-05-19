@@ -123,12 +123,14 @@ class DynamoAdminAPI(VLLMAdminAPI):
 
     Args:
         engine_rpc: The ``collective_rpc`` target forwarded by
-            ``update_weights_from_disk``.  Use ``"update_weights_from_path"``
-            for FileSystemWeightUpdateWorker / NCCLWeightUpdateWorker (default).
-            Plain vLLM without a worker extension uses ``"reload_weights"``.
+            ``update_weights_from_disk``.  Use ``"reload_weights"`` for plain
+            vLLM / dynamo.vllm without a worker extension (default).  Use
+            ``"update_weights_from_path"`` only when
+            FileSystemWeightUpdateWorker / NCCLWeightUpdateWorker is loaded via
+            ``--worker-extension-cls``.
     """
 
-    def __init__(self, engine_rpc: str = "update_weights_from_path", weight_broadcast_type: str = "filesystem") -> None:
+    def __init__(self, engine_rpc: str = "reload_weights", weight_broadcast_type: str = "filesystem") -> None:
         self._engine_rpc = engine_rpc
         # Determines which engine method is called per step: "update_weights_from_distributed"
         # for NCCL (trainer broadcasts; worker just needs to receive) vs
@@ -166,22 +168,26 @@ class DynamoAdminAPI(VLLMAdminAPI):
         if self._weight_broadcast_type == "nccl":
             # NCCL path: trainer has already broadcast weights via the NCCL group;
             # this RPC tells the inference worker to call receive_state_dict().
+            # NCCLWeightUpdateWorker exposes "update_weights_from_path", not "reload_weights".
             await self._post_engine(
                 client,
                 "update_weights_from_distributed",
                 {
                     "weight_version": Path(weight_dir).name,
                     "weight_dir": weight_dir,
-                    "engine_rpc": self._engine_rpc,
+                    "engine_rpc": "update_weights_from_path",
                 },
                 timeout=httpx.Timeout(180.0),
             )
         else:
+            # Resolve to absolute path so the inference worker (which may run in a
+            # different working directory) can find the checkpoint on the shared NFS.
+            abs_path = str(Path(weight_dir).resolve())
             await self._post_engine(
                 client,
                 "update_weights_from_disk",
                 {
-                    "model_path": weight_dir,
+                    "model_path": abs_path,
                     "weight_version": Path(weight_dir).name,
                     "engine_rpc": self._engine_rpc,
                 },
