@@ -306,9 +306,20 @@ class ClientConfig(BaseConfig):
             description="Separate base URLs for admin operations (weight updates, health checks). "
             "When set, admin clients use these URLs instead of base_url, allowing weight "
             "updates to bypass routers and hit each server directly. For backend='dynamo', "
-            "these URLs point at each worker's system status server (DYN_SYSTEM_PORT, default "
-            "8081), where /engine/* routes are exposed. If unset for backend='dynamo', "
-            "prime-rl discovers worker system URLs from GET /v1/rl/engines on base_url.",
+            "these URLs point at each worker's system status server, where /engine/* "
+            "routes are exposed. If unset for backend='dynamo', prime-rl discovers "
+            "worker-advertised system URLs from GET /v1/rl/workers on rl_base_url.",
+        ),
+    ] = None
+
+    rl_base_url: Annotated[
+        list[str] | None,
+        Field(
+            description="Dynamo RL worker discovery base URLs. Used only for backend='dynamo' "
+            "when admin_base_url is unset. These URLs point at the Dynamo RL discovery "
+            "listener (DYN_RL_PORT, default 8001), which serves GET /v1/rl/workers. "
+            "If unset, prime-rl derives the discovery URL from base_url by replacing the "
+            "port with DYN_RL_PORT or 8001.",
         ),
     ] = None
 

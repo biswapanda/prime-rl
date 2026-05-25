@@ -5,6 +5,7 @@ import os
 from itertools import cycle
 from pathlib import Path
 from typing import Protocol, runtime_checkable
+from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 import verifiers as vf
@@ -122,12 +123,14 @@ class DynamoAdminAPI(VLLMAdminAPI):
 
     Args:
         engine_rpc: The ``collective_rpc`` target forwarded by
-            ``update_weights_from_disk``.  Use ``"update_weights_from_path"``
-            for FileSystemWeightUpdateWorker / NCCLWeightUpdateWorker (default).
-            Plain vLLM without a worker extension uses ``"reload_weights"``.
+            ``update_weights_from_disk``.  Use ``"reload_weights"`` for plain
+            vLLM / dynamo.vllm without a worker extension (default).  Use
+            ``"update_weights_from_path"`` only when
+            FileSystemWeightUpdateWorker / NCCLWeightUpdateWorker is loaded via
+            ``--worker-extension-cls``.
     """
 
-    def __init__(self, engine_rpc: str = "update_weights_from_path", weight_broadcast_type: str = "filesystem") -> None:
+    def __init__(self, engine_rpc: str = "reload_weights", weight_broadcast_type: str = "filesystem") -> None:
         self._engine_rpc = engine_rpc
         # Determines which engine method is called per step: "update_weights_from_distributed"
         # for NCCL (trainer broadcasts; worker just needs to receive) vs
@@ -165,22 +168,26 @@ class DynamoAdminAPI(VLLMAdminAPI):
         if self._weight_broadcast_type == "nccl":
             # NCCL path: trainer has already broadcast weights via the NCCL group;
             # this RPC tells the inference worker to call receive_state_dict().
+            # NCCLWeightUpdateWorker exposes "update_weights_from_path", not "reload_weights".
             await self._post_engine(
                 client,
                 "update_weights_from_distributed",
                 {
                     "weight_version": Path(weight_dir).name,
                     "weight_dir": weight_dir,
-                    "engine_rpc": self._engine_rpc,
+                    "engine_rpc": "update_weights_from_path",
                 },
                 timeout=httpx.Timeout(180.0),
             )
         else:
+            # Resolve to absolute path so the inference worker (which may run in a
+            # different working directory) can find the checkpoint on the shared NFS.
+            abs_path = str(Path(weight_dir).resolve())
             await self._post_engine(
                 client,
                 "update_weights_from_disk",
                 {
-                    "model_path": weight_dir,
+                    "model_path": abs_path,
                     "weight_version": Path(weight_dir).name,
                     "engine_rpc": self._engine_rpc,
                 },
@@ -197,8 +204,11 @@ class DynamoAdminAPI(VLLMAdminAPI):
     ) -> None:
         await self._post_engine(
             client,
-            "load_lora_adapter",
-            {"lora_name": lora_name, "lora_path": lora_path},
+            "load_lora",
+            {
+                "lora_name": lora_name,
+                "source": {"uri": Path(lora_path).absolute().as_uri()},
+            },
             timeout=timeout,
         )
 
@@ -458,7 +468,7 @@ def setup_admin_clients(client_config: ClientConfig, *, use_admin_base_url: bool
     When admin_base_url is set and use_admin_base_url is true, uses those URLs
     instead of base_url, allowing weight updates to bypass routers in
     disaggregated P/D deployments. For Dynamo, if admin_base_url is unset,
-    discover worker system URLs from GET /v1/rl/engines.
+    discover worker-advertised system URLs from GET /v1/rl/workers.
     """
     if use_admin_base_url and client_config.admin_base_url:
         urls = client_config.admin_base_url
@@ -493,28 +503,50 @@ def discover_dynamo_admin_base_urls(client_config: ClientConfig) -> list[str]:
     if api_key and api_key != "EMPTY":
         headers["Authorization"] = f"Bearer {api_key}"
 
-    for base_url in client_config.base_url:
+    for base_url in _dynamo_rl_discovery_base_urls(client_config):
         discovery_base = base_url.rstrip("/").removesuffix("/v1")
         with httpx.Client(
             base_url=discovery_base,
             headers=headers,
             timeout=httpx.Timeout(connect=client_config.connect_timeout, read=30.0, write=30.0, pool=10.0),
         ) as client:
-            response = client.get("/v1/rl/engines")
+            response = client.get("/v1/rl/workers")
             response.raise_for_status()
-            for engine in response.json().get("engines", []):
-                system_url = engine.get("system_url")
+            for worker in response.json().get("workers", []):
+                system_url = worker.get("system_url")
                 if system_url:
                     urls.append(system_url)
 
     deduped = list(dict.fromkeys(urls))
     if not deduped:
         raise ValueError(
-            "Dynamo backend did not discover any worker system URLs from /v1/rl/engines. "
-            "Set client.admin_base_url explicitly or configure DYN_RL_ENGINE_SYSTEM_URL / "
-            "DYN_RL_SYSTEM_URL_TEMPLATE on the Dynamo frontend."
+            "Dynamo backend did not discover any worker system URLs from /v1/rl/workers. "
+            "Set client.admin_base_url explicitly, set client.rl_base_url to the Dynamo "
+            "RL discovery listener, and make sure Dynamo workers run with DYN_ENABLE_RL "
+            "and a system status server enabled."
         )
     return deduped
+
+
+def _dynamo_rl_discovery_base_urls(client_config: ClientConfig) -> list[str]:
+    configured = getattr(client_config, "rl_base_url", None)
+    if configured:
+        return configured
+
+    rl_port = int(os.getenv("DYN_RL_PORT", "8001"))
+    return [_replace_url_port(base_url, rl_port) for base_url in client_config.base_url]
+
+
+def _replace_url_port(base_url: str, port: int) -> str:
+    parsed = urlsplit(base_url.rstrip("/").removesuffix("/v1"))
+    scheme = parsed.scheme or "http"
+    host = parsed.hostname or parsed.netloc
+    if not host:
+        raise ValueError(f"Cannot derive Dynamo RL discovery URL from base_url={base_url!r}")
+    if ":" in host and not host.startswith("["):
+        host = f"[{host}]"
+    netloc = f"{host}:{port}"
+    return urlunsplit((scheme, netloc, "", "", ""))
 
 
 async def maybe_check_has_model(

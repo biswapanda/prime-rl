@@ -108,15 +108,15 @@ class NCCLWeightUpdateWorker(Worker):
             inference_world_size: Total number of inference GPUs across all servers.
         """
         self.quantize_in_weight_transfer = quantize_in_weight_transfer
-        # Use the worker's device index directly as the local rank.
-        # The previous dp_group-based computation broke in vLLM v1 multiprocess
-        # DP mode where each worker is a separate process with a singleton
-        # DP group (rank_in_group is always 0).
+        # vLLM's Worker.rank is the global rank inside the vLLM executor. In
+        # multi-node TP deployments, device.index repeats on every node
+        # (0..local_world_size-1), which creates duplicate NCCL receiver ranks.
+        worker_rank = getattr(self, "rank", self.device.index)
         local_rank = self.device.index
-        global_rank_inference = rank_offset + local_rank
+        global_rank_inference = rank_offset + worker_rank
 
         logger.info(
-            f"Worker [local_rank={local_rank} rank_offset={rank_offset}] "
+            f"Worker [local_rank={local_rank} worker_rank={worker_rank} rank_offset={rank_offset}] "
             f"-> [global_rank={global_rank_inference} inference_world_size={inference_world_size}]"
         )
 
