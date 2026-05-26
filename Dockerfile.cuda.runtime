@@ -81,9 +81,10 @@ COPY benchmarks/scripts /app/benchmarks/scripts
 RUN --mount=type=cache,target=/app/.cache/uv \
     uv sync --extra flash-attn --extra flash-attn-3 --extra flash-attn-cute --extra envs --extra gpt-oss --group mamba-ssm --locked --no-dev
 
-# arm64: build flash-attn from source, fix namespace conflicts, apply workarounds.
+# arm64: build flash-attn + DeepGEMM from source.
 ARG TARGETARCH
 COPY scripts/docker-arm64-post-install.sh /app/scripts/docker-arm64-post-install.sh
+COPY scripts/install_deep_gemm.sh /app/scripts/install_deep_gemm.sh
 RUN if [ "$TARGETARCH" = "arm64" ]; then /app/scripts/docker-arm64-post-install.sh; fi
 
 ############################
@@ -165,6 +166,11 @@ ENV PATH="/app/.venv/bin:$PATH"
 # HuggingFace Hub timeouts (defaults are 10s which causes issues on slow networks).
 ENV HF_HUB_ETAG_TIMEOUT=500
 ENV HF_HUB_DOWNLOAD_TIMEOUT=300
+
+# Enable FP8 grouped-GEMM kernels in vLLM MoE layers (requires DeepGEMM, built
+# during the arm64 post-install step above).
+ENV VLLM_USE_DEEP_GEMM=1
+ENV VLLM_MOE_USE_DEEP_GEMM=1
 
 # Use entrypoint for setup (ulimit, etc) but default to sleep infinity for K8s.
 ENTRYPOINT ["/app/docker-entrypoint.sh"]
