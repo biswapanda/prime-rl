@@ -120,27 +120,14 @@ def _emit_moe_experts(
     w3: Tensor,
     quantize_fp8: bool,
 ) -> None:
-    """Emit fused MoE expert weights matching vLLM's resident expert layout.
+    """Emit fused MoE expert weights in vLLM FusedMoE W13 layout.
 
     vLLM's DEEPGEMM FP8 MoE path keeps weights in `[gate; up]` (W13) order;
-    FLASHINFER paths flip to W31 (`[up; gate]`) during
-    `process_weights_after_loading`. RL broadcast bytes must match whatever
-    layout the inference workers carry post-load.
-
-    Our DGD inference workers run with `VLLM_USE_DEEP_GEMM=0` because the
-    `silu_mul_quant_fp8_packed_triton` Triton kernel hits an int32 row-offset
-    overflow during `profile_run` on the 128-expert / EP=4 / DP=4 layout (see
-    `work/bis-dev/may-26/01-qwen-235b-whiteffiber/issues.md` Issue 7). With
-    DeepGEMM off, vLLM uses the FLASHINFER path → resident layout is W31, so
-    we emit W31 here. The state-dict key remains `w13_weight` (vLLM's
-    convention; the *name* is W13 even when the *contents* are W31).
-
-    Switch back to `torch.cat([w1, w3], dim=1)` once either
-    (a) prime-rl adds an int64 patch for `silu_mul_quant_fp8_packed_triton`
-        and we can re-enable DeepGEMM, or
-    (b) vLLM merges the upstream fix and we bump the wheel.
+    FLASHINFER paths flip to W31 during `process_weights_after_loading`, so
+    inference must select the DEEPGEMM backend (`VLLM_USE_DEEP_GEMM=1`) for
+    RL weight reloads to stay valid across broadcasts.
     """
-    w13 = torch.cat([w3, w1], dim=1)  # W31 layout for FLASHINFER (DeepGEMM off)
+    w13 = torch.cat([w1, w3], dim=1)
     if not quantize_fp8:
         out[f"{prefix}.mlp.experts.w13_weight"] = w13
         out[f"{prefix}.mlp.experts.w2_weight"] = w2
