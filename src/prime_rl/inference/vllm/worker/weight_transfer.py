@@ -84,11 +84,133 @@ def build_expert_map(model: Module) -> dict[str, torch.Tensor]:
     return source_indices_by_module
 
 
+def _try_e8m0_scale_conversion(
+    name: str,
+    received_scale: torch.Tensor,
+    param: torch.Tensor,
+    params: dict[str, torch.Tensor],
+    updated_weights: set[str],
+) -> bool:
+    """Convert a trainer-format blockwise FP8 scale to vLLM's E8M0 TMA layout.
+
+    When DeepGEMM E8M0 is active (GB200 default), vLLM stores weight_scale_inv
+    tensors in a TMA-aligned [N, K/512] packed UE8M0 layout.  The trainer sends
+    [N/128, K/128] float32 blockwise scales.  This function:
+
+      1. Re-quantises the already-updated FP8 weight param so its scales round to
+         the nearest power-of-two (UE8M0), via ``requant_weight_ue8m0_inplace``.
+      2. Converts the scale layout from [N/128, K/128] to [N, K/512] via
+         ``transform_sf_into_required_layout``.
+      3. Copies the result into *param* in-place.
+
+    Returns True on success, False if conversion is not applicable or fails.
+    The caller is responsible for raising shape-mismatch errors for False returns.
+
+    ORDERING REQUIREMENT: the corresponding FP8 weight param must have been
+    updated (copied from the received tensor) before this function is called,
+    i.e. the weight must appear before its weight_scale_inv in the state iterator.
+    """
+    # Only handle weight_scale_inv tensors.
+    if not name.endswith("weight_scale_inv"):
+        return False
+
+    # Derive the corresponding weight parameter name.
+    # e.g. "...qkv_proj.weight_scale_inv" -> "...qkv_proj.weight"
+    #      "...w13_weight_scale_inv"      -> "...w13_weight"
+    weight_name = name[: -len("weight_scale_inv")] + "weight"
+    if weight_name not in params:
+        return False
+
+    # The weight must have been updated in this broadcast pass so that
+    # requant_weight_ue8m0_inplace dequantises the *new* FP8 values.
+    if weight_name not in updated_weights:
+        logger.warning(
+            "E8M0 scale conversion for %s: weight %s was not updated in this pass "
+            "(scale arrived before weight). Skipping conversion.",
+            name,
+            weight_name,
+        )
+        return False
+
+    try:
+        from vllm.model_executor.layers.quantization.utils.fp8_utils import (
+            requant_weight_ue8m0_inplace,
+        )
+        from vllm.utils.deep_gemm import transform_sf_into_required_layout
+    except ImportError as exc:
+        logger.debug("E8M0 conversion unavailable: %s", exc)
+        return False
+
+    weight_param = params[weight_name]
+
+    try:
+        # Step 1: Re-quantise the weight with UE8M0 (power-of-two) scales.
+        # received_scale is [..., N/128, K/128] float32 blockwise.
+        # After this call both weight_param and received_scale are updated
+        # in-place: weight_param holds re-quantised FP8 values; received_scale
+        # holds UE8M0 float32 scale values (same shape, same dtype).
+        requant_weight_ue8m0_inplace(
+            weight=weight_param,
+            weight_scale=received_scale,
+            block_size=(128, 128),
+        )
+
+        # Step 2: Convert scale layout [..., N/128, K/128] → [..., N, K/512].
+        # transform_sf_into_required_layout expects a leading num_groups dimension.
+        if weight_param.ndim >= 3:
+            # MoE: weight shape [..., E, N, K]
+            mn = weight_param.shape[-2]
+            k = weight_param.shape[-1]
+            num_groups = weight_param.numel() // (mn * k)
+            sf = received_scale.reshape(num_groups, received_scale.shape[-2], received_scale.shape[-1])
+        else:
+            # Dense: weight shape [N, K]
+            mn, k = int(weight_param.shape[0]), int(weight_param.shape[1])
+            num_groups = 1
+            sf = received_scale.unsqueeze(0)  # [1, N/128, K/128]
+
+        dg_scale = transform_sf_into_required_layout(
+            sf=sf,
+            mn=mn,
+            k=k,
+            recipe=(1, 128, 128),
+            num_groups=num_groups,
+            is_sfa=False,
+        )
+        param.copy_(dg_scale.view_as(param))
+        logger.debug("E8M0 scale conversion applied for %s", name)
+        return True
+
+    except Exception as exc:
+        logger.warning("E8M0 scale conversion failed for %s: %s", name, exc)
+        return False
+
+
 @torch.no_grad()
 def load_weights_kernel(model: Module, state_iter: Generator[tuple[str, torch.Tensor], None, None]) -> None:
-    """Load vLLM kernel-format tensors using in-place copy_ updates."""
+    """Load vLLM kernel-format tensors using in-place copy_ updates.
+
+    Handles the GB200 DeepGEMM E8M0 scale mismatch: the trainer broadcasts
+    blockwise [N/128, K/128] float32 scales, while vLLM with E8M0 enabled
+    stores weight_scale_inv in [N, K/512] TMA-aligned packed UE8M0 layout.
+    When is_deep_gemm_e8m0_used() is True, scale tensors with a shape mismatch
+    are automatically converted via requant_weight_ue8m0_inplace +
+    transform_sf_into_required_layout.
+    """
     params = dict(model.named_parameters())
     expert_source_indices = build_expert_map(model)
+
+    # Detect E8M0 once (cached call, cheap).
+    try:
+        from vllm.utils.deep_gemm import is_deep_gemm_e8m0_used
+        _use_e8m0 = is_deep_gemm_e8m0_used()
+    except ImportError:
+        _use_e8m0 = False
+
+    # Track which weight params have been updated in this call so we can
+    # safely call requant_weight_ue8m0_inplace on them (it must dequantise
+    # the *new* FP8 values, not the stale ones from the initial model load).
+    updated_weights: set[str] = set()
 
     loaded = 0
     skipped: list[str] = []
@@ -108,11 +230,19 @@ def load_weights_kernel(model: Module, state_iter: Generator[tuple[str, torch.Te
                 break
 
             if param.shape != tensor.shape:
+                # Attempt E8M0 scale conversion before declaring a mismatch.
+                if _use_e8m0 and _try_e8m0_scale_conversion(
+                    name, tensor, param, params, updated_weights
+                ):
+                    loaded += 1
+                    continue
+
                 shape_mismatches.append(f"{name}: param={list(param.shape)} != received={list(tensor.shape)}")
                 continue
 
         param.copy_(tensor)
         loaded += 1
+        updated_weights.add(name)
 
     if shape_mismatches:
         raise ValueError(f"Kernel weight transfer had {len(shape_mismatches)} shape mismatches: {shape_mismatches}")
