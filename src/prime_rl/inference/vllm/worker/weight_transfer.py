@@ -95,13 +95,23 @@ def _try_e8m0_scale_conversion(
 
     When DeepGEMM E8M0 is active (GB200 default), vLLM stores weight_scale_inv
     tensors in a TMA-aligned [N, K/512] packed UE8M0 layout.  The trainer sends
-    [N/128, K/128] float32 blockwise scales.  This function:
+    [N/128, K/128] float32 blockwise scales.
 
-      1. Re-quantises the already-updated FP8 weight param so its scales round to
-         the nearest power-of-two (UE8M0), via ``requant_weight_ue8m0_inplace``.
-      2. Converts the scale layout from [N/128, K/128] to [N, K/512] via
-         ``transform_sf_into_required_layout``.
-      3. Copies the result into *param* in-place.
+    This delegates to vLLM's own unified helper
+    ``deepgemm_post_process_fp8_weight_block``, which is the *exact* call vLLM
+    invokes at initial model load (via ``DeepGemmFp8BlockScaledMMKernel`` for
+    dense linears and ``prepare_fp8_moe_layer_for_deepgemm`` for MoE).  The
+    helper:
+
+      1. Re-quantises the FP8 weight to UE8M0 (power-of-two) scales in-place
+         (``requant_weight_ue8m0_inplace``).
+      2. Repacks the scale tensor to the TMA-aligned ``[..., N, K/512]`` layout
+         (``transform_sf_into_required_layout`` with recipe ``(1, 128, 128)``).
+      3. Handles 2D (dense) vs 3D (MoE) dispatch internally.
+
+    Reusing vLLM's wrapper guarantees the broadcast path produces the same
+    in-memory layout as vLLM's own startup load path — drift-free by
+    construction.
 
     Returns True on success, False if conversion is not applicable or fails.
     The caller is responsible for raising shape-mismatch errors for False returns.
@@ -134,9 +144,8 @@ def _try_e8m0_scale_conversion(
 
     try:
         from vllm.model_executor.layers.quantization.utils.fp8_utils import (
-            requant_weight_ue8m0_inplace,
+            deepgemm_post_process_fp8_weight_block,
         )
-        from vllm.utils.deep_gemm import transform_sf_into_required_layout
     except ImportError as exc:
         logger.debug("E8M0 conversion unavailable: %s", exc)
         return False
@@ -144,38 +153,16 @@ def _try_e8m0_scale_conversion(
     weight_param = params[weight_name]
 
     try:
-        # Step 1: Re-quantise the weight with UE8M0 (power-of-two) scales.
-        # received_scale is [..., N/128, K/128] float32 blockwise.
-        # After this call both weight_param and received_scale are updated
-        # in-place: weight_param holds re-quantised FP8 values; received_scale
-        # holds UE8M0 float32 scale values (same shape, same dtype).
-        requant_weight_ue8m0_inplace(
-            weight=weight_param,
-            weight_scale=received_scale,
-            block_size=(128, 128),
-        )
-
-        # Step 2: Convert scale layout [..., N/128, K/128] → [..., N, K/512].
-        # transform_sf_into_required_layout expects a leading num_groups dimension.
-        if weight_param.ndim >= 3:
-            # MoE: weight shape [..., E, N, K]
-            mn = weight_param.shape[-2]
-            k = weight_param.shape[-1]
-            num_groups = weight_param.numel() // (mn * k)
-            sf = received_scale.reshape(num_groups, received_scale.shape[-2], received_scale.shape[-1])
-        else:
-            # Dense: weight shape [N, K]
-            mn, k = int(weight_param.shape[0]), int(weight_param.shape[1])
-            num_groups = 1
-            sf = received_scale.unsqueeze(0)  # [1, N/128, K/128]
-
-        dg_scale = transform_sf_into_required_layout(
-            sf=sf,
-            mn=mn,
-            k=k,
-            recipe=(1, 128, 128),
-            num_groups=num_groups,
-            is_sfa=False,
+        # Single unified call: re-quantises weight in-place with UE8M0 scales
+        # AND repacks the scale tensor to the TMA-aligned [..., N, K/512] layout
+        # that vLLM stores.  Handles 2D (dense) and 3D (MoE) dispatch internally.
+        # The first return value is the same underlying storage as weight_param
+        # (modified in-place); we only need the new scale tensor.
+        _wq, dg_scale = deepgemm_post_process_fp8_weight_block(
+            wq=weight_param,
+            ws=received_scale,
+            quant_block_shape=(128, 128),
+            use_e8m0=True,
         )
         param.copy_(dg_scale.view_as(param))
         logger.debug("E8M0 scale conversion applied for %s", name)
