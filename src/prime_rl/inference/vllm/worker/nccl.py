@@ -108,16 +108,71 @@ class NCCLWeightUpdateWorker(Worker):
             inference_world_size: Total number of inference GPUs across all servers.
         """
         self.quantize_in_weight_transfer = quantize_in_weight_transfer
-        # vLLM's Worker.rank is the global rank inside the vLLM executor. In
-        # multi-node TP deployments, device.index repeats on every node
-        # (0..local_world_size-1), which creates duplicate NCCL receiver ranks.
-        worker_rank = getattr(self, "rank", self.device.index)
+
+        # =====================================================================
+        # PATCHED — DP+TP-aware rank computation (Option B: parallel_config
+        # dispatch). Overrides the image-baked nccl.py via ConfigMap subPath mount.
+        #
+        # The vLLM Worker exposes `self.rank` (executor-wide rank) and
+        # `self.device.index` (local GPU index 0..local_world_size-1). Neither
+        # alone correctly identifies the GPU's position across BOTH TP and DP
+        # multinode topologies:
+        #
+        #   - TP/PP multinode (one executor spans pods):
+        #       self.rank is unique 0..world_size-1
+        #       self.device.index repeats per node (0..3 on each node)
+        #       --> use self.rank
+        #
+        #   - DP-only multinode (each GPU is its own DP rank 0 of a size-1
+        #     executor — e.g. vLLM `--data-parallel-size N --tp 1`):
+        #       self.rank is 0 for every subprocess
+        #       self.device.index uniquely identifies GPU within the pod (0..N-1)
+        #       --> use self.device.index
+        #
+        # Dispatch on parallel_config (always available on a vLLM Worker via
+        # vllm_config or as a direct attribute, depending on vLLM version).
+        # =====================================================================
+        pc = None
+        for attr_path in ("vllm_config.parallel_config", "parallel_config"):
+            obj = self
+            try:
+                for part in attr_path.split("."):
+                    obj = getattr(obj, part)
+                pc = obj
+                break
+            except AttributeError:
+                continue
+
+        tp_size = getattr(pc, "tensor_parallel_size", 1) if pc is not None else 1
+        pp_size = getattr(pc, "pipeline_parallel_size", 1) if pc is not None else 1
+        worker_rank = getattr(self, "rank", 0)
         local_rank = self.device.index
-        global_rank_inference = rank_offset + worker_rank
+
+        if tp_size > 1 or pp_size > 1:
+            # Executor spans multiple ranks (TP or PP); self.rank is canonical.
+            effective_rank = worker_rank
+            rank_source = "self.rank (TP/PP > 1)"
+        else:
+            # Pure DP or single-GPU: each subprocess is its own size-1 executor
+            # with self.rank==0; only device.index distinguishes the GPUs.
+            effective_rank = local_rank
+            rank_source = "self.device.index (DP-only)"
+
+        global_rank_inference = rank_offset + effective_rank
 
         logger.info(
-            f"Worker [local_rank={local_rank} worker_rank={worker_rank} rank_offset={rank_offset}] "
-            f"-> [global_rank={global_rank_inference} inference_world_size={inference_world_size}]"
+            "Worker [tp_size=%s pp_size=%s local_rank=%s worker_rank=%s "
+            "effective_rank=%s (%s) rank_offset=%s] "
+            "-> [global_rank=%s inference_world_size=%s] (dp-tp-aware-patch)",
+            tp_size,
+            pp_size,
+            local_rank,
+            worker_rank,
+            effective_rank,
+            rank_source,
+            rank_offset,
+            global_rank_inference,
+            inference_world_size,
         )
 
         self.nccl_broadcast_receiver = NCCLWeightBroadcastReceiver(
