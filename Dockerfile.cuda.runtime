@@ -168,6 +168,14 @@ RUN rm /app/.venv/bin/python && ln -s /usr/bin/python3.12 /app/.venv/bin/python
 RUN rm /app/.venv/bin/python3 && ln -s /usr/bin/python3.12 /app/.venv/bin/python3
 RUN rm /app/.venv/bin/python3.12 && ln -s /usr/bin/python3.12 /app/.venv/bin/python3.12
 
+# python3.12-dev: Python.h headers for vLLM's Triton CudaUtils JIT-compile at runtime.
+# Required by vLLM serving (dynamo.vllm / inference); absent from the cuda-dl-base
+# runtime, which crashed inference with `fatal error: Python.h: No such file or directory`.
+USER root
+RUN apt-get update && apt-get install -y --no-install-recommends python3.12-dev \
+ && apt-get clean autoclean && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
+USER appuser
+
 # Place executables in the environment at the front of the path.
 ENV PATH="/app/.venv/bin:$PATH"
 
