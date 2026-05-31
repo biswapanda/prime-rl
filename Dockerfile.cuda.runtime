@@ -87,6 +87,14 @@ COPY scripts/docker-arm64-post-install.sh /app/scripts/docker-arm64-post-install
 COPY scripts/install_deep_gemm.sh /app/scripts/install_deep_gemm.sh
 RUN if [ "$TARGETARCH" = "arm64" ]; then /app/scripts/docker-arm64-post-install.sh; fi
 
+# vLLM PR #39366 — two-phase DP pause. Fixes the TP=4/EP=4 per-step (2nd-broadcast)
+# weight-update deadlock (stale START_DP_WAVE re-wakes a paused engine mid-collective).
+# Python-only change to vLLM 0.20.2 (no recompile); verified via `git apply -p1`.
+COPY scripts/vllm-pr-39366.patch /app/scripts/vllm-pr-39366.patch
+RUN cd /app/.venv/lib/python3.12/site-packages \
+ && git apply -p1 < /app/scripts/vllm-pr-39366.patch \
+ && echo "[build] applied vLLM PR #39366 two-phase pause"
+
 ############################
 ##### Runtime stage ########
 ############################
