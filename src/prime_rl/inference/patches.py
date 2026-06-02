@@ -18,7 +18,7 @@ def transformers_v5_compat():
     monkey_patch_deep_gemm_ep_scatter()
     monkey_patch_deep_gemm_silu_mul_quant_int64()
     monkey_patch_deep_gemm_silu_mul_quant_packed_int64()
-    monkey_patch_dp_engine_core_pause_resume_deadlock()
+    # monkey_patch_dp_engine_core_pause_resume_deadlock()  # DISABLED: use vLLM PR #39366-native two-phase pause (avoid double pause/resume fix)
     monkey_patch_fp32_lm_head()
 
 
