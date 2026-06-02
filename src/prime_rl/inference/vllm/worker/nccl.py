@@ -123,11 +123,11 @@ class NCCLWeightUpdateWorker(Worker):
         #       self.device.index repeats per node (0..3 on each node)
         #       --> use self.rank
         #
-        #   - DP-only multinode (each GPU is its own DP rank 0 of a size-1
-        #     executor — e.g. vLLM `--data-parallel-size N --tp 1`):
+        #   - DP-only (TP=1) — e.g. vLLM `--data-parallel-size N --tp 1`:
         #       self.rank is 0 for every subprocess
-        #       self.device.index uniquely identifies GPU within the pod (0..N-1)
-        #       --> use self.device.index
+        #       self.device.index is the LOCAL gpu index (0..size_local-1); for a
+        #       MULTINODE-DP follower it does NOT equal the global DP rank
+        #       --> use parallel_config.data_parallel_rank (global DP rank)
         #
         # Dispatch on parallel_config (always available on a vLLM Worker via
         # vllm_config or as a direct attribute, depending on vLLM version).
@@ -147,16 +147,26 @@ class NCCLWeightUpdateWorker(Worker):
         pp_size = getattr(pc, "pipeline_parallel_size", 1) if pc is not None else 1
         worker_rank = getattr(self, "rank", 0)
         local_rank = self.device.index
+        dp_rank = getattr(pc, "data_parallel_rank", None) if pc is not None else None
 
         if tp_size > 1 or pp_size > 1:
             # Executor spans multiple ranks (TP or PP); self.rank is canonical.
             effective_rank = worker_rank
             rank_source = "self.rank (TP/PP > 1)"
+        elif dp_rank is not None:
+            # Pure DP: use the GLOBAL data-parallel rank. Correct for BOTH single-node
+            # DP (dp_rank == device.index) AND MULTINODE DP, where a follower node's
+            # device.index is the LOCAL gpu index (0..size_local-1) and does NOT equal
+            # the global DP rank (e.g. follower DP ranks 4..7 have device.index 0..3).
+            # Using device.index there collides with the leader's ranks 0..3 and the
+            # NCCL broadcast group never forms (Bootstrap "rank N already checked in").
+            effective_rank = dp_rank
+            rank_source = "parallel_config.data_parallel_rank (DP-only, multinode-safe)"
         else:
-            # Pure DP or single-GPU: each subprocess is its own size-1 executor
-            # with self.rank==0; only device.index distinguishes the GPUs.
+            # Fallback (older vLLM lacking data_parallel_rank): single-node DP only,
+            # where device.index uniquely identifies the GPU within the pod (0..N-1).
             effective_rank = local_rank
-            rank_source = "self.device.index (DP-only)"
+            rank_source = "self.device.index (DP-only fallback)"
 
         global_rank_inference = rank_offset + effective_rank
 
