@@ -305,10 +305,36 @@ class ClientConfig(BaseConfig):
         Field(
             description="Separate base URLs for admin operations (weight updates, health checks). "
             "When set, admin clients use these URLs instead of base_url, allowing weight "
-            "updates to bypass routers and hit each server directly. Used in disaggregated "
-            "P/D deployments where the inference router should not handle admin traffic.",
+            "updates to bypass routers and hit each server directly. For backend='dynamo', "
+            "these URLs point at each worker's system status server, where /engine/* "
+            "routes are exposed. If unset for backend='dynamo', prime-rl discovers "
+            "worker-advertised system URLs from GET /v1/rl/workers on rl_base_url.",
         ),
     ] = None
+
+    rl_base_url: Annotated[
+        list[str] | None,
+        Field(
+            description="Dynamo RL worker discovery base URLs. Used only for backend='dynamo' "
+            "when admin_base_url is unset. These URLs point at the Dynamo RL discovery "
+            "listener (DYN_RL_PORT, default 8001), which serves GET /v1/rl/workers. "
+            "If unset, prime-rl derives the discovery URL from base_url by replacing the "
+            "port with DYN_RL_PORT or 8001.",
+        ),
+    ] = None
+
+    backend: Annotated[
+        Literal["vllm", "dynamo"],
+        Field(
+            description=(
+                "Inference backend selector. Picks the AdminAPI implementation used for "
+                "pause/resume/update_weights/load_lora_adapter/list_models. Default 'vllm' "
+                "matches prime-rl's bundled vLLM frontend. 'dynamo' targets NVIDIA Dynamo's "
+                "worker /engine/* admin routes on admin_base_url and routes /v1/models to "
+                "the OpenAI-compat base_url."
+            ),
+        ),
+    ] = "vllm"
 
     elastic: Annotated[
         ElasticConfig | None,

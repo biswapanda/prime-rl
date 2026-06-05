@@ -272,6 +272,8 @@ async def orchestrate(config: OrchestratorConfig):
     # Set up weight broadcast backend
     if enable_policy_updates:
         logger.info(f"Initializing weight broadcast ({config.weight_broadcast})")
+        if hasattr(inference_pool._admin_api, "_weight_broadcast_type"):
+            inference_pool._admin_api._weight_broadcast_type = config.weight_broadcast.type
         if config.weight_broadcast.type == "nccl":
             await init_nccl_broadcast(
                 inference_pool.admin_clients,
@@ -280,6 +282,7 @@ async def orchestrate(config: OrchestratorConfig):
                 config.weight_broadcast.timeout,
                 inference_world_size=config.weight_broadcast.inference_world_size,
                 quantize_in_weight_transfer=config.weight_broadcast.quantize_in_weight_transfer,
+                admin=inference_pool._admin_api,
             )
     else:
         logger.info("Skipping weight broadcast initialization (SFT distillation mode)")
