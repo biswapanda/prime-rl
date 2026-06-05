@@ -1,0 +1,23 @@
+# Trainer config for the LOCAL NIXL weight-transfer attempt (single GPU, agg, local UCX).
+# NIXL weight broadcast drives model.conversion_specs() (FP8 kernel-format transfer).
+max_steps = 3
+
+[model]
+name    = "Qwen/Qwen3-0.6B"
+seq_len = 1024
+
+[wandb]
+offline = true
+
+[optim]
+lr = 3e-6
+
+[ckpt]
+
+[weight_broadcast]
+type                 = "nixl"
+host                 = "localhost"
+port                 = 29502
+timeout              = 600
+inference_world_size = 1
+backends             = ["UCX"]

@@ -1,0 +1,19 @@
+# Trainer for the local math pre-flight (single GPU, no FSDP). Reads rollouts written
+# by the orchestrator; writes safetensors the Dynamo worker reloads (filesystem broadcast).
+max_steps = 3
+
+[model]
+name    = "Qwen/Qwen3-0.6B"
+seq_len = 1024
+
+[wandb]
+offline = true
+
+[optim]
+lr = 3e-6
+
+[ckpt]
+
+[weight_broadcast]
+type        = "filesystem"
+keep_recent = 3

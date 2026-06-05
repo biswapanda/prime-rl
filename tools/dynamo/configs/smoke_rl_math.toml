@@ -1,0 +1,44 @@
+# Local pre-flight (qwen-matej-2 merge validation): Dynamo backend (AGG), math-env, Qwen3-0.6B.
+# Agg, not disagg: local vLLM 0.20.2 ships no NixlConnector, so PD-disagg KV runs in k8s only.
+# Ports shifted off the resident bge embedding container (host :8001 is taken):
+#   Dynamo frontend HTTP :8000, RL listener :8011.
+# Weight transfer = filesystem (no NCCL/NIXL) — matches the FileSystemWeightUpdateWorker on the worker.
+max_steps            = 3
+seq_len              = 1024
+batch_size           = 8
+rollouts_per_example = 4
+# Dynamo injects token_ids via nvext (DYN_ENABLE_RL=true), not the TITO path. Keep false.
+use_token_client     = false
+
+[model]
+name = "Qwen/Qwen3-0.6B"
+
+[wandb]
+offline = true
+
+[sampling]
+max_tokens = 256
+
+[[filters]]
+type    = "gibberish"
+enforce = false
+
+[[filters]]
+type    = "repetition"
+enforce = false
+
+[[filters]]
+type    = "zero_advantage"
+enforce = false
+
+[[env]]
+id = "math-env"
+
+[client]
+base_url         = ["http://localhost:8000/v1"]
+backend          = "dynamo"
+rl_base_url      = ["http://localhost:8011/v1"]
+skip_model_check = true
+
+[weight_broadcast]
+type = "filesystem"
