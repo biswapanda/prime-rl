@@ -90,7 +90,13 @@ class NixlAgentWrapper:
         local_rank: int,
         backends: Sequence[str] = ("UCX",),
     ) -> None:
-        from nixl_cu13._api import nixl_agent, nixl_agent_config  # type: ignore
+        try:
+            from nixl_cu13._api import nixl_agent, nixl_agent_config  # type: ignore
+        except ModuleNotFoundError:
+            try:
+                from nixl_cu12._api import nixl_agent, nixl_agent_config  # type: ignore
+            except ModuleNotFoundError:
+                from nixl._api import nixl_agent, nixl_agent_config  # type: ignore
 
         pin_ucx_rail(local_rank)
         self.name = name
