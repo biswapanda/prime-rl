@@ -99,7 +99,6 @@ class NCCLWeightUpdateWorker(Worker):
         rank_offset: int,
         inference_world_size: int,
         timeout: int,
-        quantize_in_weight_transfer: bool = False,
     ) -> None:
         """Initialize the NCCL broadcast receiver.
 

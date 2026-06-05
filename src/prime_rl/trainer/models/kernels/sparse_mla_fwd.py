@@ -1,10 +1,10 @@
 # Vendored from tile-ai/tilelang (Apache 2.0), modified for dynamic shapes.
 
-# TileLang ships a libcudart stub that proxies to the real CUDA runtime via
-# dlsym(RTLD_DEFAULT, ...).  If the stub's own symbols are the first ones found
-# (because nothing loaded the real libcudart globally yet), the self-check fails
-# and the stub calls abort().  Pre-loading the real library with RTLD_GLOBAL
-# ensures dlsym finds it before the stub's own exports.
+# TileLang ships a libcudart stub that wins dlsym(RTLD_DEFAULT, ...) if the
+# real libcudart has not been loaded with RTLD_GLOBAL yet, and its self-check
+# then aborts the process. Preload the real library before the tilelang
+# import below so dlsym finds it first. Wrapped in try/except because CDLL
+# can fail on hosts without a real CUDA runtime (e.g. CI).
 import ctypes as _ctypes
 
 try:

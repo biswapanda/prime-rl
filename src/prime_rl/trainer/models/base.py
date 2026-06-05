@@ -1,5 +1,10 @@
+from typing import TYPE_CHECKING
+
 from torch import Tensor
 from transformers.modeling_utils import PreTrainedModel
+
+if TYPE_CHECKING:
+    from prime_rl.trainer.models.conversion_spec import ConversionSpec
 
 
 class PreTrainedModelPrimeRL(PreTrainedModel):
@@ -134,6 +139,25 @@ class PreTrainedModelPrimeRL(PreTrainedModel):
             quantize_fp8: Whether to emit FP8 (e4m3) kernel weights with per-block scales.
         """
         raise NotImplementedError(f"convert_layer_to_vllm_kernel is not implemented for {cls.__name__}")
+
+    def conversion_specs(self, layer_idx: int) -> tuple["ConversionSpec", ...]:
+        """Return the :class:`ConversionSpec` tuple for one layer.
+
+        TransportPlan iterates these to build its slots. The model decides
+        which specs apply to this layer (dense vs sparse, etc.).
+        """
+        raise NotImplementedError(f"conversion_specs is not implemented for {self.__class__.__name__}")
+
+    def non_layer_conversion_specs(self) -> tuple["ConversionSpec", ...]:
+        """Return :class:`ConversionSpec` entries for top-level (non-per-layer)
+        tensors such as ``embed_tokens.weight``, ``norm.weight``, and
+        ``lm_head.weight``. TransportPlan appends these after per-layer
+        specs, using an empty prefix so ``dst`` / sources are treated as
+        full paths.
+
+        Default: no top-level tensors.
+        """
+        return ()
 
     def init_buffers_post_meta(self) -> None:
         """

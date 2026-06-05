@@ -56,6 +56,7 @@ from prime_rl.orchestrator.vf_utils import (
 from prime_rl.trainer.model import setup_tokenizer
 from prime_rl.utils.client import (
     init_nccl_broadcast,
+    init_nixl_transfer,
     setup_inference_pool,
 )
 from prime_rl.utils.config import cli
@@ -284,6 +285,16 @@ async def orchestrate(config: OrchestratorConfig):
                 quantize_in_weight_transfer=config.weight_broadcast.quantize_in_weight_transfer,
                 admin=inference_pool._admin_api,
             )
+        elif config.weight_broadcast.type == "nixl":
+            await init_nixl_transfer(
+                inference_pool.admin_clients,
+                config.weight_broadcast.host,
+                config.weight_broadcast.port,
+                config.weight_broadcast.timeout,
+                trainer_world_size=config.weight_broadcast.trainer_world_size,
+                inference_world_size=config.weight_broadcast.inference_world_size,
+                backends=config.weight_broadcast.backends,
+            )
     else:
         logger.info("Skipping weight broadcast initialization (SFT distillation mode)")
 
@@ -312,8 +323,8 @@ async def orchestrate(config: OrchestratorConfig):
             prev_ckpt_step = scheduler.ckpt_step - 1
 
         if enable_policy_updates:
-            # In NCCL mode, skip existence check - weights are broadcasted, not stored on disk
-            check_exists = config.weight_broadcast.type != "nccl"
+            # In NCCL/NIXL mode, skip existence check - weights are transferred, not stored on disk
+            check_exists = config.weight_broadcast.type not in ("nccl", "nixl")
             wait_timeout = config.ckpt.wait_for_weights_timeout if config.ckpt else None
             weights_path = get_weight_dir(
                 config.output_dir, scheduler.ckpt_step, check_exists=check_exists, wait_timeout=wait_timeout

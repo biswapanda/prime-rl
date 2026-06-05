@@ -603,6 +603,7 @@ async def check_health(
 
 
 NCCL_READY_MARKER = "NCCL_READY"
+NIXL_READY_MARKER = "NIXL_READY"
 
 
 async def update_weights(
@@ -632,12 +633,14 @@ async def update_weights(
     logger.info("Pausing inference engines for weight update")
     await asyncio.gather(*[admin.pause(c) for c in admin_clients])
     try:
-        # NCCL_READY marker is created before servers enter the receive path
+        # NCCL/NIXL ready markers are created before servers enter the receive path
+        # (both transports use a rendezvous file to avoid racing the rendezvous/store
+        # setup on the sender side).
         if weight_dir is not None:
-            nccl_ready_file = weight_dir / NCCL_READY_MARKER
-            nccl_ready_file.parent.mkdir(parents=True, exist_ok=True)
-            nccl_ready_file.touch()
-            logger.debug(f"Created NCCL_READY marker at {nccl_ready_file}")
+            weight_dir.mkdir(parents=True, exist_ok=True)
+            (weight_dir / NCCL_READY_MARKER).touch()
+            (weight_dir / NIXL_READY_MARKER).touch()
+            logger.debug(f"Created {NCCL_READY_MARKER} / {NIXL_READY_MARKER} markers at {weight_dir}")
 
         await asyncio.gather(*[admin.update_weights(c, weight_dir_posix) for c in admin_clients])
     finally:
@@ -753,4 +756,56 @@ async def init_nccl_broadcast(
             _init_nccl_broadcast(admin_client, client_num * gpus_per_server)
             for client_num, admin_client in enumerate(admin_clients)
         ]
+    )
+
+
+async def init_nixl_transfer(
+    admin_clients: list[AsyncClient],
+    host: str,
+    port: int,
+    timeout: int,
+    trainer_world_size: int,
+    inference_world_size: int,
+    backends: list[str] | None = None,
+) -> None:
+    """Initialize NIXL weight transfer on all inference servers.
+
+    Mirrors :func:`init_nccl_broadcast`. Each admin client represents one vLLM
+    server; per-server ``rank_offset`` determines where that server's GPUs land
+    in the inference rank space (which is offset by ``trainer_world_size`` in
+    the joint StatelessProcessGroup).
+    """
+    logger = get_logger()
+    backends = backends or ["UCX"]
+
+    gpus_per_server = inference_world_size // len(admin_clients)
+
+    logger.info(
+        f"Initializing NIXL transfer: {len(admin_clients)} servers, "
+        f"trainer_ws={trainer_world_size}, inference_ws={inference_world_size}, gpus_per_server={gpus_per_server}"
+    )
+
+    async def _init(admin_client: AsyncClient, rank_offset: int) -> None:
+        try:
+            response = await admin_client.post(
+                "/init_nixl_transfer",
+                json={
+                    "host": host,
+                    "port": port,
+                    "rank_offset": rank_offset,
+                    "trainer_world_size": trainer_world_size,
+                    "inference_world_size": inference_world_size,
+                    "timeout": timeout,
+                    "backends": backends,
+                },
+            )
+            response.raise_for_status()
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 404:
+                logger.warning("The route /init_nixl_transfer does not exist. Skipping NIXL init.")
+                return
+            raise
+
+    await asyncio.gather(
+        *[_init(admin_client, client_num * gpus_per_server) for client_num, admin_client in enumerate(admin_clients)]
     )
