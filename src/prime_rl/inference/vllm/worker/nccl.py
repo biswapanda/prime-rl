@@ -160,8 +160,8 @@ class NCCLWeightUpdateWorker(Worker):
             # the global DP rank (e.g. follower DP ranks 4..7 have device.index 0..3).
             # Using device.index there collides with the leader's ranks 0..3 and the
             # NCCL broadcast group never forms (Bootstrap "rank N already checked in").
-            effective_rank = dp_rank
-            rank_source = "parallel_config.data_parallel_rank (DP-only, multinode-safe)"
+            effective_rank = local_rank  # DGD per-pod-offset override (issue #7); proper fix = per-engine offsets in orch
+            rank_source = "self.device.index (DGD per-pod-offset, issue #7)"
         else:
             # Fallback (older vLLM lacking data_parallel_rank): single-node DP only,
             # where device.index uniquely identifies the GPU within the pod (0..N-1).
