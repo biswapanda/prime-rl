@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+from collections.abc import Callable
 from itertools import cycle
 from pathlib import Path
 from typing import Protocol, runtime_checkable
@@ -253,6 +254,11 @@ class InferencePool(Protocol):
     """Protocol for inference pools (static or elastic)."""
 
     @property
+    def model_name(self) -> str:
+        """Get current model name for inference requests."""
+        ...
+
+    @property
     def train_clients(self) -> list[vf.ClientConfig]:
         """Get inference clients."""
         ...
@@ -274,7 +280,13 @@ class InferencePool(Protocol):
         """Wait for inference pool to be ready."""
         ...
 
-    async def update_weights(self, weight_dir: Path | None, lora_name: str | None = None, step: int = 0) -> None:
+    async def update_weights(
+        self,
+        weight_dir: Path | None,
+        lora_name: str | None = None,
+        step: int = 0,
+        on_engines_paused: Callable[[], None] | None = None,
+    ) -> None:
         """Update weights on all inference servers."""
         ...
 
@@ -294,12 +306,14 @@ class StaticInferencePool:
         self,
         client_config: ClientConfig,
         model_name: str,
-        train_client_type: str = "openai_chat_completions_token",
+        train_client_type: str = "openai_chat_completions",
         eval_client_type: str = "openai_chat_completions",
         renderer_name: str = "auto",
         tool_parser: str | None = None,
         reasoning_parser: str | None = None,
         renderer_pool_size: int | None = None,
+        preserve_all_thinking: bool = False,
+        preserve_thinking_between_tool_calls: bool = False,
     ):
         renderer_model_name = model_name if train_client_type == "renderer" else None
         self._train_clients = setup_clients(
@@ -310,6 +324,8 @@ class StaticInferencePool:
             tool_parser=tool_parser,
             reasoning_parser=reasoning_parser,
             renderer_pool_size=renderer_pool_size,
+            preserve_all_thinking=preserve_all_thinking,
+            preserve_thinking_between_tool_calls=preserve_thinking_between_tool_calls,
         )
         self._eval_clients = setup_clients(client_config, client_type=eval_client_type)
         self._admin_clients = setup_admin_clients(client_config)
@@ -352,8 +368,21 @@ class StaticInferencePool:
             self._model_clients, model_name, skip_model_check=self._skip_model_check, admin=self._admin_api
         )
 
-    async def update_weights(self, weight_dir: Path | None, lora_name: str | None = None, step: int = 0) -> None:
-        await update_weights(self._admin_clients, weight_dir, lora_name=lora_name, step=step, admin=self._admin_api)
+    async def update_weights(
+        self,
+        weight_dir: Path | None,
+        lora_name: str | None = None,
+        step: int = 0,
+        on_engines_paused: Callable[[], None] | None = None,
+    ) -> None:
+        await update_weights(
+            self._admin_clients,
+            weight_dir,
+            lora_name=lora_name,
+            step=step,
+            admin=self._admin_api,
+            on_engines_paused=on_engines_paused,
+        )
 
     def get_metrics(self) -> dict[str, float]:
         return {}
@@ -365,23 +394,16 @@ class StaticInferencePool:
 async def setup_inference_pool(
     client_config: ClientConfig,
     model_name: str,
-    train_client_type: str = "openai_chat_completions_token",
+    train_client_type: str = "openai_chat_completions",
     eval_client_type: str = "openai_chat_completions",
     renderer_name: str = "auto",
     tool_parser: str | None = None,
     reasoning_parser: str | None = None,
     renderer_pool_size: int | None = None,
+    preserve_all_thinking: bool = False,
+    preserve_thinking_between_tool_calls: bool = False,
 ) -> InferencePool:
     """Create an inference pool from config (static or elastic)."""
-    logger = get_logger()
-
-    if train_client_type == "openai_chat_completions_token":
-        logger.warning(
-            "Token-in-token-out (TITO) client is enabled for training. Only use "
-            "this if your environment has a linear history and the chat "
-            "template has the extension property."
-        )
-
     if client_config.is_elastic:
         from prime_rl.utils.elastic import ElasticInferencePool
 
@@ -394,13 +416,10 @@ async def setup_inference_pool(
             tool_parser=tool_parser,
             reasoning_parser=reasoning_parser,
             renderer_pool_size=renderer_pool_size,
+            preserve_all_thinking=preserve_all_thinking,
+            preserve_thinking_between_tool_calls=preserve_thinking_between_tool_calls,
         )
 
-    logger.info(
-        f"Initializing static inference pool (base_url={', '.join(client_config.base_url)}, "
-        f"dp_rank_count={client_config.dp_rank_count}, "
-        f"api_key_var={client_config.api_key_var}, headers={client_config.headers})"
-    )
     return StaticInferencePool(
         client_config,
         model_name=model_name,
@@ -410,6 +429,8 @@ async def setup_inference_pool(
         tool_parser=tool_parser,
         reasoning_parser=reasoning_parser,
         renderer_pool_size=renderer_pool_size,
+        preserve_all_thinking=preserve_all_thinking,
+        preserve_thinking_between_tool_calls=preserve_thinking_between_tool_calls,
     )
 
 
@@ -421,6 +442,8 @@ def setup_clients(
     tool_parser: str | None = None,
     reasoning_parser: str | None = None,
     renderer_pool_size: int | None = None,
+    preserve_all_thinking: bool = False,
+    preserve_thinking_between_tool_calls: bool = False,
 ) -> list[vf.ClientConfig]:
     # Pick the verifiers wire-shape selector based on client_config.backend.
     # When backend == "dynamo", both RendererClient and
@@ -431,9 +454,21 @@ def setup_clients(
     renderer_transport = "dynamo_chat_nvext" if client_config.backend == "dynamo" else "prime_vllm_generate"
     clients = []
     client_idx = 0
+    # Only forward preserve flags when the client actually uses a renderer —
+    # MITO/TITO clients ignore them and the verifiers ClientConfig may reject
+    # unknown extras on older versions.
+    renderer_extra: dict = {}
+    if client_type == "renderer":
+        renderer_extra = {
+            "preserve_all_thinking": preserve_all_thinking,
+            "preserve_thinking_between_tool_calls": preserve_thinking_between_tool_calls,
+        }
+    env_headers = {
+        k: v for k, v in ((k, os.getenv(v)) for k, v in client_config.headers_from_env.items()) if v is not None
+    }
     for base_url in client_config.base_url:
         for dp_rank in range(client_config.dp_rank_count):
-            headers = client_config.headers.copy()
+            headers = {**client_config.headers, **env_headers}
             if client_config.dp_rank_count > 1:
                 headers["X-data-parallel-rank"] = str(dp_rank)
             clients.append(
@@ -455,6 +490,7 @@ def setup_clients(
                     max_retries=10,
                     extra_headers=headers,
                     extra_headers_from_state=client_config.extra_headers_from_state,
+                    **renderer_extra,
                 )
             )
             client_idx += 1
@@ -478,7 +514,10 @@ def setup_admin_clients(client_config: ClientConfig, *, use_admin_base_url: bool
         urls = client_config.base_url
 
     def _setup_admin_client(base_url: str) -> httpx.AsyncClient:
-        headers = client_config.headers.copy()  # avoid mutating config
+        env_headers = {
+            k: v for k, v in ((k, os.getenv(v)) for k, v in client_config.headers_from_env.items()) if v is not None
+        }
+        headers = {**client_config.headers, **env_headers}
         api_key = os.getenv(client_config.api_key_var, "EMPTY")
         if api_key and api_key != "EMPTY":
             headers["Authorization"] = f"Bearer {api_key}"
@@ -612,6 +651,7 @@ async def update_weights(
     step: int = 0,
     *,
     admin: AdminAPI = _DEFAULT_ADMIN,
+    on_engines_paused: Callable[[], None] | None = None,
 ) -> None:
     """Update weights on static inference servers.
 
@@ -620,6 +660,11 @@ async def update_weights(
     collective weight transfer. The server-side ``/update_weights`` endpoint
     resets the prefix cache to invalidate any KV states computed with the old
     weights.
+
+    Args:
+        on_engines_paused: Optional callback invoked after all engines are
+            paused but before the weight transfer begins. Used by the NIXL+MX
+            path to signal the trainer that it's safe to start the RDMA push.
     """
     logger = get_logger()
 
@@ -638,6 +683,9 @@ async def update_weights(
             nccl_ready_file.parent.mkdir(parents=True, exist_ok=True)
             nccl_ready_file.touch()
             logger.debug(f"Created NCCL_READY marker at {nccl_ready_file}")
+
+        if on_engines_paused is not None:
+            on_engines_paused()
 
         await asyncio.gather(*[admin.update_weights(c, weight_dir_posix) for c in admin_clients])
     finally:
@@ -754,3 +802,100 @@ async def init_nccl_broadcast(
             for client_num, admin_client in enumerate(admin_clients)
         ]
     )
+
+
+async def init_nixl_mx_broadcast(
+    admin_clients: list[AsyncClient],
+    host: str,
+    port: int,
+    inference_world_size: int,
+) -> None:
+    """Initialize NIXL+MX receivers on all inference servers."""
+    logger = get_logger()
+    gpus_per_server = inference_world_size // len(admin_clients)
+
+    logger.info(
+        f"Initializing NIXL+MX broadcast: {len(admin_clients)} servers, "
+        f"inference_world_size={inference_world_size}, gpus_per_server={gpus_per_server}"
+    )
+
+    async def _init(admin_client: AsyncClient, rank_offset: int) -> None:
+        response = await admin_client.post(
+            "/init_nixl_mx",
+            json={"host": host, "port": port, "rank_offset": rank_offset},
+        )
+        response.raise_for_status()
+
+    await asyncio.gather(*[_init(admin_client, i * gpus_per_server) for i, admin_client in enumerate(admin_clients)])
+
+
+async def init_nixl_mx_v2_broadcast(
+    admin_clients: list[AsyncClient],
+    host: str,
+    port: int,
+    inference_world_size: int,
+    *,
+    publish_self_as_replica: bool = True,
+    listen_port: int | None = None,
+) -> None:
+    """Initialize the ``mx_v2`` (pull-mode) receivers on inference servers.
+
+    Mirrors :func:`init_nixl_mx_broadcast` but targets the v2 worker
+    extension (``NIXLMxV2WeightUpdateWorker``) which uses the published
+    :class:`MxWeightTransferEngine` adapter instead of the in-tree
+    :class:`MxRendezvous`.
+    """
+    logger = get_logger()
+    gpus_per_server = inference_world_size // len(admin_clients)
+
+    logger.info(
+        f"Initializing NIXL+MX v2 broadcast: {len(admin_clients)} servers, "
+        f"inference_world_size={inference_world_size}, gpus_per_server={gpus_per_server}, "
+        f"publish_self_as_replica={publish_self_as_replica}"
+    )
+
+    async def _init(admin_client: AsyncClient, rank_offset: int) -> None:
+        response = await admin_client.post(
+            "/init_nixl_mx_v2",
+            json={
+                "host": host,
+                "port": port,
+                "rank_offset": rank_offset,
+                "publish_self_as_replica": publish_self_as_replica,
+                "listen_port": listen_port,
+            },
+        )
+        response.raise_for_status()
+
+    await asyncio.gather(*[_init(admin_client, i * gpus_per_server) for i, admin_client in enumerate(admin_clients)])
+
+
+async def update_weights_v2(
+    admin_clients: list[AsyncClient],
+    step: int,
+    *,
+    compile_target_filter: list[str] | None = None,
+    timeout_seconds: float = 300.0,
+    same_rank_only: bool = True,
+) -> list[dict]:
+    """Drive a v2 (pull-mode) refit on all inference servers.
+
+    Mirrors the existing ``/update_weights`` poke but for the
+    ``mx_v2`` worker path. Returns the per-server metrics dicts so the
+    orchestrator can emit per-cycle timing to its dashboards.
+    """
+
+    async def _update(admin_client: AsyncClient) -> dict:
+        response = await admin_client.post(
+            "/update_weights_v2",
+            json={
+                "step": int(step),
+                "compile_target_filter": compile_target_filter,
+                "timeout_seconds": float(timeout_seconds),
+                "same_rank_only": bool(same_rank_only),
+            },
+        )
+        response.raise_for_status()
+        return response.json()
+
+    return list(await asyncio.gather(*[_update(c) for c in admin_clients]))

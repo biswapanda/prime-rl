@@ -36,6 +36,7 @@ dependencies = [
     "tilelang>=0.1.8",
     "flash-linear-attention",
     "nvidia-ml-py>=12.575.51",
+    "modelexpress",
 ]
 
 [project.scripts]
@@ -157,6 +158,7 @@ renderers = false
 vllm-router = false
 dion = false
 pydantic-config = false
+modelexpress = false
 deep-ep = false
 deep-gemm = false
 nixl-cu12 = false
@@ -173,6 +175,7 @@ dion = { git = "https://github.com/samsja/dion.git", rev = "d891eeb" }
 transformers = { git = "https://github.com/huggingface/transformers.git", rev = "c1c3424" }
 flash-attn-4 = { git = "https://github.com/Dao-AILab/flash-attention.git", subdirectory = "flash_attn/cute", rev = "96bd151" }
 pydantic-config = { git = "https://github.com/samsja/pydantic_config.git", branch = "main" }
+modelexpress = { git = "https://github.com/ai-dynamo/modelexpress.git", subdirectory = "modelexpress_client/python", rev = "facab2c" }
 vllm-router = { url = "https://github.com/PrimeIntellect-ai/router/releases/download/v0.1.22/vllm_router-0.1.22-cp38-abi3-manylinux_2_28_x86_64.whl" }
 vllm = [
     { url = "https://github.com/vllm-project/vllm/releases/download/v0.20.2/vllm-0.20.2+cu129-cp38-abi3-manylinux_2_31_x86_64.whl", marker = "platform_machine == 'x86_64'" },
