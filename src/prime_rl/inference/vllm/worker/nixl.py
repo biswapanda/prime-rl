@@ -17,6 +17,16 @@ from torch.nn import Module
 from vllm.distributed.utils import StatelessProcessGroup
 from vllm.logger import init_logger
 
+# Pre-import flashinfer's CUDA runtime binding BEFORE the prime_rl.trainer.models.* imports
+# below pull in tilelang (via the eager model registry in models/__init__.py). tilelang's
+# libcudart stub otherwise shadows the real libcudart and breaks flashinfer.comm.cuda_ipc's
+# CudaRTLibrary with "AttributeError: .../libcudart_stub.so: undefined symbol: cudaDeviceReset"
+# inside the spawned vLLM worker proc.
+try:
+    import flashinfer.comm.cuda_ipc as _flashinfer_cuda_ipc  # noqa: F401
+except Exception:
+    pass
+
 from prime_rl.inference.vllm.worker.weight_transfer import (
     assert_mla_absorbed_weights_match,
     build_expert_map,
