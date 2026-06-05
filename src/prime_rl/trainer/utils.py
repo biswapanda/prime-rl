@@ -1,5 +1,6 @@
 import gc
 import json
+import os
 import pickle
 import shutil
 import time
@@ -130,9 +131,38 @@ def get_ckpt_disk_metrics(output_dir: Path) -> dict[str, float]:
     }
 
 
+def _nixl_prewarm_ucx() -> None:
+    """Load UCX's CUDA + IB transport modules before NCCL initializes.
+
+    NIXL/UCX must load its transport modules before NCCL: NCCL's CUDA-driver state
+    setup otherwise makes UCX's *first* module probe fail ("no usable transports
+    rc,cuda_copy" -> NIXL_ERR_BACKEND), which SIGABRTs every rank at NIXL
+    weight-broadcast init. Creating a throwaway UCX agent here (the CUDA context is
+    already set by set_device, before init_process_group) loads the modules
+    process-globally so they persist for the real broadcast agent created later.
+    Gated on PRIME_RL_NIXL_PREWARM=1 (only relevant for the NIXL weight transport).
+    """
+    try:
+        try:
+            from nixl_cu13._api import nixl_agent, nixl_agent_config
+        except ImportError:
+            try:
+                from nixl_cu12._api import nixl_agent, nixl_agent_config
+            except ImportError:
+                from nixl._api import nixl_agent, nixl_agent_config
+        nixl_agent("ucx-prewarm", nixl_agent_config(backends=["UCX"]))
+        get_logger().info("Pre-warmed UCX transport modules before NCCL init (NIXL)")
+    except Exception as e:
+        get_logger().warning(f"UCX pre-warm skipped: {e}")
+
+
 def setup_torch_distributed(timeout: timedelta = DEFAULT_TIMEOUT, enable_gloo: bool = False):
     device_id = get_world().local_rank
     torch.cuda.set_device(device_id)
+    # NIXL/UCX coexistence: pre-warm UCX transport modules before NCCL init (see
+    # _nixl_prewarm_ucx). Gated by env so non-NIXL transports are unaffected.
+    if os.environ.get("PRIME_RL_NIXL_PREWARM") == "1":
+        _nixl_prewarm_ucx()
     # Use Gloo backend for CPU and NCCL for GPU when CPU offloading is enabled
     # Otherwise use NCCL for better GPU performance
     backend = None  # by default nccl

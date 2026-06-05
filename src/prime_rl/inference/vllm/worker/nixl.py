@@ -45,6 +45,43 @@ else:
 logger = init_logger("vllm.inference.vllm.worker_nixl")
 
 
+# --- NIXL + NCCL coexistence (mirrors prime_rl.trainer.utils._nixl_prewarm_ucx) ---
+# UCX must load its CUDA + IB transport modules BEFORE NCCL initializes. In an AGG
+# worker the NIXL weight-receiver agent (init_nixl_transfer) is the first UCX context;
+# created after vLLM's TP NCCL init it fails with "no usable transports rc,cuda_copy"
+# (NIXL_ERR_BACKEND) and SIGABRTs the worker. Wrap init_process_group to pre-warm a
+# throwaway UCX agent once, right before the first NCCL init (vLLM has set the CUDA
+# device by then), so the modules load process-globally and persist. Installed only
+# when this NIXL worker extension is imported (i.e. NIXL transport).
+import torch.distributed as _dist
+
+_orig_init_process_group = _dist.init_process_group
+_ucx_prewarmed = False
+
+
+def _init_process_group_with_ucx_prewarm(*args: Any, **kwargs: Any):
+    global _ucx_prewarmed
+    if not _ucx_prewarmed:
+        _ucx_prewarmed = True
+        try:
+            if torch.cuda.is_available():
+                try:
+                    from nixl_cu13._api import nixl_agent, nixl_agent_config
+                except ImportError:
+                    try:
+                        from nixl_cu12._api import nixl_agent, nixl_agent_config
+                    except ImportError:
+                        from nixl._api import nixl_agent, nixl_agent_config
+                nixl_agent("ucx-prewarm", nixl_agent_config(backends=["UCX"]))
+                logger.info("Pre-warmed UCX transport modules before NCCL init (NIXL worker)")
+        except Exception as e:  # noqa: BLE001
+            logger.warning("UCX pre-warm skipped: %s", e)
+    return _orig_init_process_group(*args, **kwargs)
+
+
+_dist.init_process_group = _init_process_group_with_ucx_prewarm
+
+
 @functools.lru_cache(maxsize=1)
 def _cudart():
     cudart = _ctypes.CDLL("libcudart.so")
