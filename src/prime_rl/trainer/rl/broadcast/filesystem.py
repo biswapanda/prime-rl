@@ -47,7 +47,6 @@ class FileSystemWeightBroadcast(WeightBroadcast):
             if isinstance(model, PreTrainedModelPrimeRL) and model.is_prime_state_dict(state_dict):
                 model.convert_to_hf(state_dict)
             else:
-                # For regular transformers models, revert internal format to original HF hub format
                 from transformers.core_model_loading import revert_weight_conversion
 
                 state_dict = revert_weight_conversion(model, state_dict)
@@ -79,7 +78,7 @@ class FileSystemWeightBroadcast(WeightBroadcast):
                     self.logger.debug(f"Saving weights for run {idx} to {save_dir}")
                     save_state_dict(state_dict, save_dir, self.save_format, self.save_sharded, adapter=adapter_only)
                     if adapter_only:
-                        orch_lora = self.multi_run_manager.config[idx].model.lora
+                        orch_lora = self.multi_run_manager.config[idx].student.model.lora
                         save_lora_config(
                             model,
                             save_dir,
