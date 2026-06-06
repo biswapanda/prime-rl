@@ -639,26 +639,11 @@ class TrainerConfig(BaseConfig):
                 )
         return self
 
-    @model_validator(mode="after")
-    def validate_weight_broadcast_type(self):
-        if self.weight_broadcast.type == "nccl" and self.max_async_level != 1:
-            raise ValueError("NCCL weight broadcast only works with async level 1")
-        return self
-
-    @model_validator(mode="after")
-    def validate_broadcast_keep_recent(self):
-        if (
-            self.weight_broadcast.type == "filesystem"
-            and self.weight_broadcast.keep_recent is not None
-            and self.weight_broadcast.keep_recent < self.max_async_level
-        ):
-            raise ValueError(
-                f"weight_broadcast.keep_recent ({self.weight_broadcast.keep_recent}) must be "
-                f">= max_async_level ({self.max_async_level}). The retention window must cover "
-                f"the staleness window, otherwise vLLM can hit LoRAAdapterNotFoundError when an "
-                f"in-flight generate request lazy-loads an adapter dir the trainer already removed."
-            )
-        return self
+    # NOTE: HEAD's validate_weight_broadcast_type (nccl => async level 1) and
+    # validate_broadcast_keep_recent (keep_recent >= max_async_level) were dropped
+    # in the rl-sdk-4 merge: main removed trainer.max_async_level (the staleness
+    # window is now orchestrator.max_off_policy_steps). Re-add equivalent guards at
+    # the RLConfig level (which sees both trainer + orchestrator) if needed.
 
     @model_validator(mode="after")
     def validate_opt_and_fsdp_offload(self):
